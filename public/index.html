@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HussBall</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* ---- Login screen ---- */
+  #login {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px; z-index: 100;
+    background: #1a1a2e;
+  }
+  #login h1 { font-size: 52px; font-weight: 900; letter-spacing: 2px; }
+  #login h1 .red { color: #e74c3c; }
+  #login h1 .blue { color: #3498db; }
+  #login input {
+    font-size: 20px; padding: 12px 24px;
+    border: 2px solid #0f3460; border-radius: 8px;
+    background: #16213e; color: #e0e0e0;
+    width: 280px; text-align: center; outline: none;
+  }
+  #login input:focus { border-color: #e94560; }
+  #login button {
+    font-size: 22px; padding: 12px 52px;
+    border: none; border-radius: 8px;
+    background: #e94560; color: white;
+    font-weight: bold; cursor: pointer;
+  }
+  #login button:hover { background: #c0392b; }
+
+  /* ---- Game canvas (always behind everything) ---- */
+  #canvas {
+    position: fixed; inset: 0;
+    display: block;
+    z-index: 0;
+  }
+
+  /* ---- HUD (over canvas, under lobby) ---- */
+  #hud {
+    display: none;
+    position: fixed; top: 0; left: 0; right: 0;
+    height: 40px; z-index: 5;
+    background: rgba(22,33,62,0.85);
+    align-items: center; justify-content: center;
+    gap: 20px; font-weight: bold;
+  }
+  #hud .sr { color: #e74c3c; font-size: 26px; }
+  #hud .sb { color: #3498db; font-size: 26px; }
+  #hud .timer { color: #aaa; font-size: 15px; }
+  #hud .phase { color: #e94560; font-size: 13px; }
+  #hud .chaos-event { font-size: 13px; font-weight: bold; }
+  #hud .chaos-event.active { color: #ff9800; }
+  #hud .chaos-event.pause { color: #888; }
+  #hud .hint { color: #666; font-size: 11px; position: absolute; right: 12px; }
+
+  /* ---- Lobby overlay ---- */
+  #lobby-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    z-index: 50;
+    background: rgba(10,10,20,0.92);
+    flex-direction: column;
+    align-items: center;
+    padding-top: 30px;
+    gap: 16px;
+  }
+  #lobby-overlay.visible { display: flex; }
+
+  #lobby-overlay h2 {
+    font-size: 28px; font-weight: 800;
+    margin-bottom: 4px;
+  }
+  #lobby-overlay h2 .red { color: #e74c3c; }
+  #lobby-overlay h2 .blue { color: #3498db; }
+
+  /* Admin bar */
+  .admin-bar {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    justify-content: center;
+    padding: 6px 0;
+  }
+  .admin-bar button, .admin-bar select {
+    font-size: 13px; padding: 6px 16px;
+    border: 1px solid #444; border-radius: 5px;
+    background: #16213e; color: #ccc; cursor: pointer;
+  }
+  .admin-bar button:hover { background: #0f3460; }
+  .admin-bar .ab-field {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; color: #999;
+  }
+  .admin-bar .ab-field input {
+    width: 48px; padding: 4px 6px; text-align: center;
+    font-size: 13px; border: 1px solid #444; border-radius: 4px;
+    background: #16213e; color: #ccc; outline: none;
+  }
+  .admin-bar .ab-field input:focus { border-color: #e94560; }
+  .admin-bar button.primary {
+    background: #27ae60; color: white; border-color: #27ae60;
+    font-weight: bold; font-size: 15px; padding: 8px 28px;
+  }
+  .admin-bar button.primary:hover { background: #219a52; }
+  .admin-bar button.danger {
+    background: #c0392b; color: white; border-color: #c0392b;
+  }
+  .admin-bar button.warn {
+    background: #e67e22; color: white; border-color: #e67e22;
+  }
+  .admin-bar button.active {
+    background: #2980b9; border-color: #3498db; color: white;
+  }
+
+  /* Team columns */
+  .teams-container {
+    display: flex; gap: 24px;
+    justify-content: center;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: 800px;
+    padding: 0 20px;
+  }
+  .team-col {
+    flex: 1;
+    display: flex; flex-direction: column;
+    border-radius: 8px;
+    overflow: hidden;
+    max-height: 60vh;
+  }
+  .team-col.spec-col { max-width: 180px; }
+
+  .team-header {
+    padding: 10px 0;
+    text-align: center;
+    font-weight: bold; font-size: 16px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .team-col.red-col .team-header { background: rgba(231,76,60,0.3); color: #e74c3c; }
+  .team-col.blue-col .team-header { background: rgba(52,152,219,0.3); color: #3498db; }
+  .team-col.spec-col .team-header { background: rgba(150,150,150,0.2); color: #888; }
+
+  .team-list {
+    flex: 1;
+    overflow-y: auto;
+    background: rgba(255,255,255,0.03);
+    padding: 6px;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .player-row {
+    display: flex; align-items: center;
+    padding: 6px 10px; border-radius: 5px;
+    background: rgba(255,255,255,0.04);
+    gap: 8px; font-size: 14px;
+    transition: background 0.1s;
+  }
+  .player-row:hover { background: rgba(255,255,255,0.08); }
+  .player-row .name { flex: 1; }
+  .player-row .badge {
+    font-size: 10px; padding: 2px 6px;
+    border-radius: 3px; font-weight: bold;
+  }
+  .player-row .badge.admin { background: #f39c12; color: #000; }
+  .player-row .badge.you { background: #e94560; color: #fff; }
+  .player-row .actions { display: flex; gap: 4px; }
+  .player-row .actions button {
+    font-size: 11px; padding: 2px 8px;
+    border: 1px solid #555; border-radius: 3px;
+    background: #222; color: #aaa; cursor: pointer;
+  }
+  .player-row .actions button:hover { background: #444; color: #fff; }
+
+  .join-btn {
+    margin: 6px; padding: 8px;
+    border: 2px dashed #444; border-radius: 6px;
+    background: transparent; color: #666;
+    cursor: pointer; font-size: 13px;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .join-btn:hover { border-color: #888; color: #aaa; }
+
+  /* Status bar */
+  .lobby-status {
+    font-size: 12px; color: #666;
+    padding: 8px 0 16px;
+    text-align: center;
+  }
+
+  .sound-toggle {
+    font-size: 12px; padding: 5px 16px;
+    border: 1px solid #444; border-radius: 5px;
+    background: #16213e; color: #ccc; cursor: pointer;
+    margin-bottom: 16px;
+  }
+  .sound-toggle:hover { background: #0f3460; }
+  .sound-toggle.off { color: #666; }
+
+  /* Connection toast */
+  #conn-toast {
+    display: none;
+    position: fixed; bottom: 16px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 200;
+    padding: 8px 24px; border-radius: 6px;
+    background: #c0392b; color: white;
+    font-size: 14px; font-weight: bold;
+  }
+  #conn-toast.visible { display: block; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1><span class="red">Huss</span><span class="blue">Ball</span></h1>
+  <input type="text" id="name-input" placeholder="Your name" maxlength="16" autocomplete="off" spellcheck="false">
+  <button id="join-btn">JOIN</button>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<div id="hud">
+  <span class="sr" id="score-red">0</span>
+  <span class="timer" id="timer"></span>
+  <span class="sb" id="score-blue">0</span>
+  <span class="phase" id="phase-label"></span>
+  <span class="chaos-event" id="chaos-event"></span>
+  <span class="hint">ESC = lobby</span>
+</div>
+
+<div id="lobby-overlay">
+  <h2><span class="red">Huss</span><span class="blue">Ball</span> Lobby</h2>
+  <div class="admin-bar" id="admin-bar"></div>
+  <div class="teams-container">
+    <div class="team-col red-col">
+      <div class="team-header">Red</div>
+      <div class="team-list" id="team-red"></div>
+      <button class="join-btn" id="join-red">Join Red</button>
+    </div>
+    <div class="team-col spec-col">
+      <div class="team-header">Spec</div>
+      <div class="team-list" id="team-spec"></div>
+    </div>
+    <div class="team-col blue-col">
+      <div class="team-header">Blue</div>
+      <div class="team-list" id="team-blue"></div>
+      <button class="join-btn" id="join-blue">Join Blue</button>
+    </div>
+  </div>
+  <div class="lobby-status" id="lobby-status"></div>
+  <button class="sound-toggle" id="sound-toggle">Sound: ON</button>
+</div>
+
+<div id="conn-toast">Disconnected - reconnecting...</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---- Sound effects (Web Audio API) ----
+  let audioCtx = null;
+  let soundEnabled = localStorage.getItem('hussball_sound') !== 'off';
+
+  function getAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return audioCtx;
+  }
+
+  function sfxKick() {
+    if (!soundEnabled) return;
+    const ctx = getAudio();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(250, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.08);
+    gain.gain.setValueAtTime(0.35, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.1);
+  }
+
+  function sfxGoal() {
+    if (!soundEnabled) return;
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    // Gentle rising chord: sine waves, lower freqs, softer attack
+    [260, 330, 390].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq * 0.9, t + i * 0.06);
+      osc.frequency.linearRampToValueAtTime(freq, t + 0.2 + i * 0.06);
+      gain.gain.setValueAtTime(0, t + i * 0.06);
+      gain.gain.linearRampToValueAtTime(0.12, t + 0.08 + i * 0.06);
+      gain.gain.setValueAtTime(0.12, t + 0.35);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t + i * 0.06); osc.stop(t + 0.9);
+    });
+  }
+
+  function sfxWhistle() {
+    if (!soundEnabled) return;
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(750, t);
+    osc.frequency.setValueAtTime(850, t + 0.12);
+    osc.frequency.setValueAtTime(750, t + 0.24);
+    gain.gain.setValueAtTime(0.25, t);
+    gain.gain.setValueAtTime(0.25, t + 0.28);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t); osc.stop(t + 0.35);
+  }
+
+  // ---- DOM ----
+  const loginEl     = document.getElementById('login');
+  const nameInput   = document.getElementById('name-input');
+  const joinBtn     = document.getElementById('join-btn');
+  const canvasEl    = document.getElementById('canvas');
+  const ctx         = canvasEl.getContext('2d');
+  const hudEl       = document.getElementById('hud');
+  const scoreRedEl  = document.getElementById('score-red');
+  const scoreBlueEl = document.getElementById('score-blue');
+  const timerEl     = document.getElementById('timer');
+  const phaseLabel  = document.getElementById('phase-label');
+  const chaosEventEl = document.getElementById('chaos-event');
+  const lobbyEl     = document.getElementById('lobby-overlay');
+  const adminBarEl  = document.getElementById('admin-bar');
+  const teamRedEl   = document.getElementById('team-red');
+  const teamBlueEl  = document.getElementById('team-blue');
+  const teamSpecEl  = document.getElementById('team-spec');
+  const joinRedBtn  = document.getElementById('join-red');
+  const joinBlueBtn = document.getElementById('join-blue');
+  const lobbyStatus = document.getElementById('lobby-status');
+  const soundToggle = document.getElementById('sound-toggle');
+  const connToast   = document.getElementById('conn-toast');
+
+  // ---- State ----
+  let ws = null;
+  let myId = null;
+  let myName = localStorage.getItem('hussball_name') || '';
+  let connected = false;
+  let lobbyData = null;    // last lobby message
+  let lobbyVisible = true; // lobby overlay shown?
+  let debugMode = false;   // render physics hitboxes?
+  let hasJoined = false;   // passed login screen?
+  let reconnectTimer = null;
+  let endedLobbyTimer = null;
+  let pingMs = 0;
+  let pingInterval = null;
+
+  // Velocity extrapolation with smooth correction
+  const TICK_MS = 1000 / 60;
+  let latestState = null;          // most recent gameState from server
+  let stateArrivalTime = 0;        // performance.now() when latestState arrived
+  // Smoothed render positions: keyed by entity key ('b0','b1',...,'p<id>')
+  // Each entry: { x, y, vx, vy }
+  const renderEntities = new Map();
+
+  nameInput.value = myName;
+
+  // Input
+  const keys = { up: false, down: false, left: false, right: false, kick: false };
+  let lastSentInput = '';
+
+  // ---- Login ----
+  joinBtn.addEventListener('click', doLogin);
+  nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+  function doLogin() {
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+    myName = name;
+    localStorage.setItem('hussball_name', name);
+    hasJoined = true;
+    loginEl.style.display = 'none';
+    connect();
+  }
+
+  // ---- WebSocket ----
+  function connect() {
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}`);
+
+    ws.onopen = () => {
+      connected = true;
+      connToast.classList.remove('visible');
+      clearTimeout(reconnectTimer);
+      clearInterval(pingInterval);
+      ws.send(JSON.stringify({ type: 'join', name: myName }));
+      // Ping loop: measure RTT every second
+      pingInterval = setInterval(() => {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping', t: performance.now() }));
+      }, 1000);
+    };
+
+    ws.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      handleMsg(msg);
+    };
+
+    ws.onclose = () => {
+      connected = false;
+      clearInterval(pingInterval);
+      if (hasJoined) {
+        connToast.classList.add('visible');
+        reconnectTimer = setTimeout(connect, 2000);
+      }
+    };
+    ws.onerror = () => {};
+  }
+
+  function send(obj) {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }
+
+  // ---- Message handling ----
+  function handleMsg(msg) {
+    switch (msg.type) {
+      case 'pong':
+        pingMs = Math.round(performance.now() - msg.t);
+        return;
+
+      case 'welcome':
+        myId = msg.id;
+        // Show lobby
+        lobbyVisible = true;
+        renderLobbyVisibility();
+        break;
+
+      case 'lobby':
+        lobbyData = msg;
+        renderLobby();
+        break;
+
+      case 'gameState': {
+        const now = performance.now();
+        const prevState = latestState;
+        const elapsedTicks = stateArrivalTime > 0 ? (now - stateArrivalTime) / TICK_MS : 0;
+        latestState = msg;
+        stateArrivalTime = now;
+
+        // Smooth correction: blend from where we WERE rendering toward new server position
+        const CORRECTION_FACTOR = 0.4; // 0=ignore server, 1=snap instantly
+
+        // Balls
+        for (let i = 0; i < msg.balls.length; i++) {
+          const b = msg.balls[i];
+          const key = 'b' + i;
+          const re = renderEntities.get(key);
+          if (re && prevState && prevState.phase === msg.phase) {
+            // Where extrapolation placed us at this moment (in tick-units)
+            const extraX = re.x + (re.vx || 0) * elapsedTicks;
+            const extraY = re.y + (re.vy || 0) * elapsedTicks;
+            // Blend toward server truth
+            re.x = extraX + (b.x - extraX) * CORRECTION_FACTOR;
+            re.y = extraY + (b.y - extraY) * CORRECTION_FACTOR;
+          } else {
+            // First state or phase change -> snap
+            renderEntities.set(key, { x: b.x, y: b.y, vx: 0, vy: 0 });
+          }
+          // Always update velocity to latest
+          const ent = renderEntities.get(key);
+          ent.vx = b.vx;
+          ent.vy = b.vy;
+        }
+        // Clean up stale ball render entities (e.g. extra balls removed after goal)
+        for (let i = msg.balls.length; ; i++) {
+          const key = 'b' + i;
+          if (!renderEntities.has(key)) break;
+          renderEntities.delete(key);
+        }
+
+        // Players
+        for (const p of msg.players) {
+          if (!p.disc) continue;
+          const key = 'p' + p.id;
+          const re = renderEntities.get(key);
+          if (re && prevState && prevState.phase === msg.phase) {
+            const extraX = re.x + (re.vx || 0) * elapsedTicks;
+            const extraY = re.y + (re.vy || 0) * elapsedTicks;
+            re.x = extraX + (p.disc.x - extraX) * CORRECTION_FACTOR;
+            re.y = extraY + (p.disc.y - extraY) * CORRECTION_FACTOR;
+          } else {
+            renderEntities.set(key, { x: p.disc.x, y: p.disc.y, vx: 0, vy: 0 });
+          }
+          const ent = renderEntities.get(key);
+          ent.vx = p.disc.vx;
+          ent.vy = p.disc.vy;
+        }
+
+        // Auto-show lobby 3s after game ends
+        if (msg.phase === 'ended' && (!prevState || prevState.phase !== 'ended')) {
+          clearTimeout(endedLobbyTimer);
+          endedLobbyTimer = setTimeout(() => {
+            if (!lobbyVisible) { lobbyVisible = true; renderLobbyVisibility(); }
+          }, 3000);
+          sfxWhistle();
+        }
+
+        // Sound: goal
+        if (msg.phase === 'goal' && (!prevState || prevState.phase !== 'goal')) {
+          sfxGoal();
+        }
+
+        // Sound: kick (successful ball kick only)
+        if (msg.kicked) sfxKick();
+
+        break;
+      }
+
+      case 'gameStarted':
+        latestState = null;
+        stateArrivalTime = 0;
+        renderEntities.clear();
+        lobbyVisible = false;
+        renderLobbyVisibility();
+        sfxWhistle();
+        break;
+
+      case 'gameStopped':
+        latestState = null;
+        stateArrivalTime = 0;
+        renderEntities.clear();
+        lobbyVisible = true;
+        renderLobbyVisibility();
+        break;
+
+      case 'gamePaused':
+      case 'gameResumed':
+        // lobby data will arrive right after
+        break;
+
+      case 'mapChanged':
+      case 'restart':
+        // Clear render entities so next gameState snaps to new positions
+        renderEntities.clear();
+        latestState = null;
+        break;
+    }
+  }
+
+  // ---- ESC toggle ----
+  window.addEventListener('keydown', e => {
+    // Don't capture game keys when typing in input fields
+    const isTyping = document.activeElement && document.activeElement.tagName === 'INPUT';
+
+    if (e.key === 'Escape' && hasJoined && connected) {
+      e.preventDefault();
+      lobbyVisible = !lobbyVisible;
+      renderLobbyVisibility();
+    }
+    if (e.key === 'F3') {
+      e.preventDefault();
+      debugMode = !debugMode;
+    }
+    // Game input
+    const action = KEY_MAP[e.code];
+    if (action && !lobbyVisible && !isTyping) {
+      e.preventDefault();
+      keys[action] = true;
+      sendInput();
+    }
+    // Admin cheats (numpad)
+    if (!isTyping && !lobbyVisible) {
+      if (e.code === 'Numpad1') { e.preventDefault(); send({ type: 'cheat', cheat: 'extraBall' }); }
+      if (e.code === 'Numpad2') { e.preventDefault(); send({ type: 'cheat', cheat: 'boost' }); }
+    }
+  });
+
+  window.addEventListener('keyup', e => {
+    const action = KEY_MAP[e.code];
+    if (action) {
+      e.preventDefault();
+      keys[action] = false;
+      sendInput();
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    keys.up = keys.down = keys.left = keys.right = keys.kick = false;
+    sendInput();
+  });
+
+  const KEY_MAP = {
+    'ArrowUp': 'up', 'KeyW': 'up',
+    'ArrowDown': 'down', 'KeyS': 'down',
+    'ArrowLeft': 'left', 'KeyA': 'left',
+    'ArrowRight': 'right', 'KeyD': 'right',
+    'Space': 'kick', 'KeyX': 'kick',
+    'ControlLeft': 'kick', 'ControlRight': 'kick',
+    'ShiftLeft': 'kick', 'ShiftRight': 'kick',
+    'Numpad0': 'kick',
+  };
+
+  function sendInput() {
+    const encoded = JSON.stringify({ type: 'input', ...keys });
+    if (encoded !== lastSentInput) {
+      lastSentInput = encoded;
+      send({ type: 'input', ...keys });
+    }
+  }
+
+  // ---- Lobby rendering ----
+  function renderLobbyVisibility() {
+    lobbyEl.classList.toggle('visible', lobbyVisible);
+    // Show HUD when game is running
+    const gameRunning = lobbyData && (lobbyData.roomPhase === 'playing' || lobbyData.roomPhase === 'paused');
+    hudEl.style.display = gameRunning ? 'flex' : 'none';
+
+    // When lobby shown, clear game inputs
+    if (lobbyVisible) {
+      keys.up = keys.down = keys.left = keys.right = keys.kick = false;
+      sendInput();
+    }
+  }
+
+  joinRedBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'red' }));
+  joinBlueBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'blue' }));
+
+  // Sound toggle
+  function updateSoundToggle() {
+    soundToggle.textContent = soundEnabled ? 'Sound: ON' : 'Sound: OFF';
+    soundToggle.classList.toggle('off', !soundEnabled);
+  }
+  updateSoundToggle();
+  soundToggle.addEventListener('click', () => {
+    soundEnabled = !soundEnabled;
+    localStorage.setItem('hussball_sound', soundEnabled ? 'on' : 'off');
+    updateSoundToggle();
+  });
+
+  function renderLobby() {
+    if (!lobbyData) return;
+    const { players, adminId, freeJoin, currentMap, maps, roomPhase, scoreLimit, timeLimit } = lobbyData;
+    const iAmAdmin = myId === adminId;
+
+    // Disable join buttons if freeJoin is off and not admin
+    const canSelfJoin = freeJoin || iAmAdmin;
+    joinRedBtn.style.display = canSelfJoin ? '' : 'none';
+    joinBlueBtn.style.display = canSelfJoin ? '' : 'none';
+
+    // ---- Admin bar ----
+    let ab = '';
+    if (iAmAdmin) {
+      // Map select
+      ab += '<select id="ab-map">';
+      (maps || []).forEach(m => {
+        ab += `<option value="${escHTML(m)}" ${m === currentMap ? 'selected' : ''}>${escHTML(m)}</option>`;
+      });
+      ab += '</select>';
+
+      // Score limit & time limit
+      ab += `<span class="ab-field">Goals: <input type="number" id="ab-score" min="0" max="99" value="${scoreLimit}"></span>`;
+      ab += `<span class="ab-field">Time(s): <input type="number" id="ab-time" min="0" max="999" value="${timeLimit}"></span>`;
+
+      if (roomPhase === 'lobby') {
+        ab += '<button class="primary" data-action="start">Start Game</button>';
+      } else if (roomPhase === 'playing') {
+        ab += '<button class="warn" data-action="pause">Pause</button>';
+        ab += '<button class="danger" data-action="stop">Stop Game</button>';
+        ab += '<button data-action="restart">Restart</button>';
+      } else if (roomPhase === 'paused') {
+        ab += '<button class="primary" data-action="resume">Resume</button>';
+        ab += '<button class="danger" data-action="stop">Stop Game</button>';
+        ab += '<button data-action="restart">Restart</button>';
+      }
+      ab += '<button data-action="randomize">Randomize Teams</button>';
+      ab += `<button class="${freeJoin ? 'active' : ''}" data-action="toggleFJ">${freeJoin ? 'Free Join: ON' : 'Free Join: OFF'}</button>`;
+    } else {
+      ab += `<span style="color:#888;font-size:13px;">Map: ${escHTML(currentMap)}</span>`;
+      ab += `<span style="color:#888;font-size:12px;">Goals: ${scoreLimit || '\u221E'} | Time: ${timeLimit ? timeLimit + 's' : '\u221E'}</span>`;
+      if (roomPhase === 'paused') {
+        ab += '<span style="color:#e67e22;font-size:13px;font-weight:bold;">PAUSED</span>';
+      }
+    }
+    adminBarEl.innerHTML = ab;
+
+    // Admin bar events
+    const abMap = document.getElementById('ab-map');
+    if (abMap) {
+      abMap.addEventListener('change', () => send({ type: 'changeMap', map: abMap.value }));
+    }
+    const abScore = document.getElementById('ab-score');
+    if (abScore) {
+      abScore.addEventListener('change', () => send({ type: 'changeScoreLimit', value: abScore.value }));
+    }
+    const abTime = document.getElementById('ab-time');
+    if (abTime) {
+      abTime.addEventListener('change', () => send({ type: 'changeTimeLimit', value: abTime.value }));
+    }
+    adminBarEl.querySelectorAll('button[data-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const a = btn.dataset.action;
+        if (a === 'start')     send({ type: 'startGame' });
+        if (a === 'pause')     send({ type: 'pauseGame' });
+        if (a === 'resume')    send({ type: 'resumeGame' });
+        if (a === 'stop')      send({ type: 'stopGame' });
+        if (a === 'restart')   send({ type: 'restart' });
+        if (a === 'randomize') send({ type: 'adminRandomize' });
+        if (a === 'toggleFJ')  send({ type: 'adminToggleFJ' });
+      });
+    });
+
+    // ---- Team lists ----
+    const red  = players.filter(p => p.team === 'red');
+    const blue = players.filter(p => p.team === 'blue');
+    const spec = players.filter(p => p.team === 'spec');
+
+    teamRedEl.innerHTML  = red.map(p => playerRowHTML(p, iAmAdmin)).join('');
+    teamBlueEl.innerHTML = blue.map(p => playerRowHTML(p, iAmAdmin)).join('');
+    teamSpecEl.innerHTML = spec.map(p => playerRowHTML(p, iAmAdmin)).join('');
+
+    // Attach admin action listeners
+    lobbyEl.querySelectorAll('button[data-move]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        send({ type: 'adminMove', targetId: +btn.dataset.pid, team: btn.dataset.move });
+      });
+    });
+    lobbyEl.querySelectorAll('button[data-transfer]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        send({ type: 'adminTransfer', targetId: +btn.dataset.transfer });
+      });
+    });
+
+    // Status
+    const total = players.length;
+    const rCount = red.length;
+    const bCount = blue.length;
+    lobbyStatus.textContent = `${total} player${total !== 1 ? 's' : ''} connected  |  Red: ${rCount}  Blue: ${bCount}`;
+
+    renderLobbyVisibility();
+  }
+
+  function playerRowHTML(p, iAmAdmin) {
+    const isMe = p.id === myId;
+    let badges = '';
+    if (p.isAdmin) badges += '<span class="badge admin">ADMIN</span>';
+    if (isMe)      badges += '<span class="badge you">YOU</span>';
+
+    let actions = '';
+    const canMove = iAmAdmin || (isMe && lobbyData && lobbyData.freeJoin);
+    if (canMove) {
+      if (p.team !== 'red')  actions += `<button data-pid="${p.id}" data-move="red">Red</button>`;
+      if (p.team !== 'blue') actions += `<button data-pid="${p.id}" data-move="blue">Blue</button>`;
+      if (p.team !== 'spec') actions += `<button data-pid="${p.id}" data-move="spec">Spec</button>`;
+    }
+    if (iAmAdmin && !isMe && !p.isAdmin) {
+      actions += `<button data-transfer="${p.id}">★</button>`;
+    }
+
+    return `<div class="player-row">
+      <span class="name">${escHTML(p.name)}</span>
+      ${badges}
+      <span class="actions">${actions}</span>
+    </div>`;
+  }
+
+  // Move player via inline buttons
+  lobbyEl.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-move]');
+    if (!btn) return;
+    const pid = +btn.dataset.pid;
+    const team = btn.dataset.move;
+    if (pid === myId) {
+      send({ type: 'selfTeam', team });
+    } else {
+      send({ type: 'adminMove', targetId: pid, team });
+    }
+  });
+
+  function escHTML(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ---- Extrapolation helper ----
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function getExtrapState() {
+    if (!latestState) return null;
+    const state = latestState;
+    // Freeze extrapolation when game ended to prevent infinite drift
+    const dtTicks = state.phase === 'ended' ? 0 : (performance.now() - stateArrivalTime) / TICK_MS;
+
+    // Extrapolate ball positions
+    const balls = [];
+    for (let i = 0; i < state.balls.length; i++) {
+      const b = state.balls[i];
+      const re = renderEntities.get('b' + i);
+      if (re) {
+        balls.push({
+          x: re.x + re.vx * dtTicks,
+          y: re.y + re.vy * dtTicks,
+          radius: b.radius,
+          color: b.color,
+        });
+      } else {
+        balls.push({ x: b.x, y: b.y, radius: b.radius, color: b.color });
+      }
+    }
+
+    // Extrapolate player positions
+    const players = [];
+    for (const p of state.players) {
+      if (!p.disc) { players.push(p); continue; }
+      const re = renderEntities.get('p' + p.id);
+      if (re) {
+        players.push({
+          id: p.id, name: p.name, team: p.team, kicking: p.kicking,
+          disc: {
+            x: re.x + re.vx * dtTicks,
+            y: re.y + re.vy * dtTicks,
+            radius: p.disc.radius,
+            color: p.disc.color,
+          },
+        });
+      } else {
+        players.push(p);
+      }
+    }
+
+    return {
+      balls, players,
+      score: state.score, phase: state.phase, timer: state.timer,
+      lastScorer: state.lastScorer, map: state.map, mapInfo: state.mapInfo,
+      chaos: state.chaos,
+    };
+  }
+
+  // ---- Canvas sizing ----
+  let canvasW = 0, canvasH = 0; // logical (CSS) dimensions
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    canvasW = window.innerWidth;
+    canvasH = window.innerHeight;
+    canvasEl.width = canvasW * dpr;
+    canvasEl.height = canvasH * dpr;
+    canvasEl.style.width = canvasW + 'px';
+    canvasEl.style.height = canvasH + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // ---- Render loop ----
+  function renderLoop() {
+    render();
+    requestAnimationFrame(renderLoop);
+  }
+  requestAnimationFrame(renderLoop);
+
+  function render() {
+    const W = canvasW;
+    const H = canvasH;
+    const state = getExtrapState();
+
+    // No game data yet -> dark bg
+    if (!state) {
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fillRect(0, 0, W, H);
+      return;
+    }
+
+    // Update HUD
+    scoreRedEl.textContent = state.score.red;
+    scoreBlueEl.textContent = state.score.blue;
+    if (state.timer > 0) {
+      const secs = Math.ceil(state.timer / 60);
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      timerEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+    } else {
+      timerEl.textContent = '';
+    }
+
+    if (state.phase === 'goal')
+      phaseLabel.textContent = `GOAL! ${state.lastScorer.toUpperCase()} scores!`;
+    else if (state.phase === 'ended') {
+      const w = state.score.red > state.score.blue ? 'RED' : state.score.blue > state.score.red ? 'BLUE' : 'DRAW';
+      phaseLabel.textContent = `Game Over — ${w} wins!`;
+    } else if (lobbyData && lobbyData.roomPhase === 'paused')
+      phaseLabel.textContent = 'PAUSED';
+    else
+      phaseLabel.textContent = '';
+
+    // Chaos event HUD
+    const ch = state.chaos;
+    if (ch) {
+      const secs = Math.ceil(ch.timer / 60);
+      if (ch.active) {
+        chaosEventEl.textContent = `${ch.active.name} — ${secs}s`;
+        chaosEventEl.className = 'chaos-event active';
+      } else {
+        chaosEventEl.textContent = `Next event in ${secs}s`;
+        chaosEventEl.className = 'chaos-event pause';
+      }
+    } else {
+      chaosEventEl.textContent = '';
+      chaosEventEl.className = 'chaos-event';
+    }
+
+    // ---- Field (data-driven from mapInfo) ----
+    const mi = state.mapInfo;
+    const vis = mi.visual || {};
+    const fieldW = mi.w;
+    const fieldH = mi.h;
+    const padX = 60, padY = 40;
+    const scaleX = (W - padX * 2) / (fieldW + 80);
+    const scaleY = (H - padY * 2) / (fieldH + 40);
+    const scale = Math.min(scaleX, scaleY);
+    const cx = W / 2;
+    const cy = H / 2;
+
+    function ts(wx, wy) { return { x: cx + wx * scale, y: cy + wy * scale }; }
+
+    // Bg
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, W, H);
+
+    // Field rect
+    const ftl = ts(-fieldW / 2, -fieldH / 2);
+    const fbr = ts(fieldW / 2, fieldH / 2);
+    ctx.fillStyle = mi.bg || '#718C5A';
+    ctx.fillRect(ftl.x, ftl.y, fbr.x - ftl.x, fbr.y - ftl.y);
+
+    // Field border (orange glow during Bouncy Walls chaos event)
+    const chaosBouncyActive = ch && ch.active && ch.active.id === 'bouncyWalls';
+    if (chaosBouncyActive) {
+      ctx.save();
+      ctx.shadowColor = '#ff9800';
+      ctx.shadowBlur = 18 * scale;
+      ctx.strokeStyle = 'rgba(255,152,0,0.7)';
+      ctx.lineWidth = Math.max(2, 3 * scale);
+      ctx.strokeRect(ftl.x, ftl.y, fbr.x - ftl.x, fbr.y - ftl.y);
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = Math.max(1, 2 * scale);
+      ctx.strokeRect(ftl.x, ftl.y, fbr.x - ftl.x, fbr.y - ftl.y);
+    }
+
+    // Visual decorations: lines
+    for (const ln of (vis.lines || [])) {
+      const a = ts(ln.x1, ln.y1);
+      const b = ts(ln.x2, ln.y2);
+      ctx.strokeStyle = ln.color;
+      ctx.lineWidth = Math.max(1, (ln.width || 2) * scale);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+
+    // Visual decorations: circles
+    for (const c of (vis.circles || [])) {
+      const p = ts(c.x, c.y);
+      const r = c.radius * scale;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      if (c.fill) {
+        ctx.fillStyle = c.fill; ctx.fill();
+      } else {
+        ctx.strokeStyle = c.color;
+        ctx.lineWidth = Math.max(1, (c.width || 2) * scale);
+        ctx.stroke();
+      }
+    }
+
+    // Goal posts
+    for (const post of (mi.posts || [])) {
+      const p = ts(post.x, post.y);
+      const r = post.radius * scale;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = post.color || '#fff';
+      ctx.fill();
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
+    }
+
+    // Balls
+    for (const ball of state.balls) {
+      const p = ts(ball.x, ball.y);
+      const r = ball.radius * scale;
+      const ballBorder = 3;
+      // Black border (filled circle underneath)
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#000';
+      ctx.fill();
+      // White core
+      ctx.beginPath(); ctx.arc(p.x, p.y, r - ballBorder, 0, Math.PI * 2);
+      ctx.fillStyle = ball.color || '#fff';
+      ctx.fill();
+    }
+
+    // Players
+    for (const pl of state.players) {
+      if (!pl.disc) continue;
+      const d = pl.disc;
+      const p = ts(d.x, d.y);
+      const r = d.radius * scale;
+      const isMe = pl.id === myId;
+
+      // Glow around own player (thin white aurora with gap)
+      if (isMe) {
+        const glowWidth = 2.5 * scale;
+        const gap = glowWidth * 2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r + gap + glowWidth / 2, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = glowWidth;
+        ctx.stroke();
+      }
+
+      // Player disc fill + border
+      const borderW = 3.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r - borderW / 2, 0, Math.PI * 2);
+      ctx.fillStyle = d.color; ctx.fill();
+
+      // Border: black normally, white when kicking
+      ctx.strokeStyle = pl.kicking ? '#fff' : '#000';
+      ctx.lineWidth = borderW;
+      ctx.stroke();
+
+      // Inner highlight
+      ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.13)'; ctx.fill();
+
+      // Name (not shown above own player)
+      if (!isMe) {
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${Math.max(10, 12 * scale)}px sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.fillText(pl.name, p.x, p.y - r - 4);
+      }
+    }
+
+    // ---- Debug overlay (F3) ----
+    if (debugMode) {
+      const CG = { WALL: 0x08, OUTER: 0x20, NET: 0x40, RED_WALL: 0x80, BLUE_WALL: 0x100 };
+      const wallColors = {
+        [CG.WALL]:      'rgba(0,255,0,0.6)',
+        [CG.OUTER]:     'rgba(255,255,0,0.5)',
+        [CG.NET]:       'rgba(0,150,255,0.6)',
+        [CG.RED_WALL]:  'rgba(255,60,60,0.5)',
+        [CG.BLUE_WALL]: 'rgba(60,100,255,0.5)',
+      };
+      // Walls — clamp to visible area so y=-5000 lines don't vanish
+      const viewTop = -fieldH * 2, viewBot = fieldH * 2;
+      for (const w of (mi.walls || [])) {
+        const y1 = Math.max(w.y1, viewTop), y2 = Math.min(w.y2, viewBot);
+        const x1 = Math.max(w.x1, -fieldW * 2), x2 = Math.min(w.x2, fieldW * 2);
+        // For vertical walls y1>y2 is possible after clamping if segment is reversed
+        const a = ts(w.x1 === w.x2 ? w.x1 : x1, w.y1 === w.y2 ? w.y1 : y1);
+        const b = ts(w.x1 === w.x2 ? w.x2 : x2, w.y1 === w.y2 ? w.y2 : y2);
+        ctx.strokeStyle = wallColors[w.cGroup] || 'rgba(255,0,255,0.5)';
+        ctx.lineWidth = Math.max(2, 3 * scale);
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // Post hitboxes
+      for (const post of (mi.posts || [])) {
+        const p = ts(post.x, post.y);
+        const r = post.radius * scale;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,0,255,0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      // Player disc hitbox + kick range
+      for (const pl of state.players) {
+        if (!pl.disc) continue;
+        const p = ts(pl.disc.x, pl.disc.y);
+        const r = pl.disc.radius * scale;
+        // Physics radius
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0,255,255,0.5)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // Kick range
+        const kr = (pl.disc.radius + (mi.kickRadius || 4)) * scale;
+        ctx.beginPath(); ctx.arc(p.x, p.y, kr, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,200,0,0.35)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Ball hitbox
+      for (const ball of state.balls) {
+        const p = ts(ball.x, ball.y);
+        const r = ball.radius * scale;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0,255,255,0.5)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      // Goal zones
+      for (const g of (mi.goals || [])) {
+        if (g.isVolleyball) {
+          const a = ts(-fieldW / 2, g.floorY);
+          const b = ts(fieldW / 2, g.floorY);
+          ctx.strokeStyle = 'rgba(255,100,100,0.5)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 4]);
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          ctx.setLineDash([]);
+        } else {
+          const a = ts(g.x, g.y1);
+          const b = ts(g.x, g.y2);
+          ctx.strokeStyle = g.team === 'red' ? 'rgba(255,80,80,0.6)' : 'rgba(80,80,255,0.6)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 4]);
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      // Label
+      ctx.fillStyle = 'rgba(0,255,0,0.7)';
+      ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText('DEBUG (F3)', 8, 46);
+    }
+
+    // Goal overlay
+    if (state.phase === 'goal') {
+      const sc = state.lastScorer === 'red' ? '#e74c3c' : '#3498db';
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = sc;
+      ctx.font = 'bold 52px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('GOAL!', cx, cy - 20);
+      ctx.fillStyle = '#fff'; ctx.font = '26px sans-serif';
+      ctx.fillText(`${state.score.red} — ${state.score.blue}`, cx, cy + 30);
+    }
+
+    // Ended overlay
+    if (state.phase === 'ended') {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, W, H);
+      const w = state.score.red > state.score.blue ? 'RED WINS!' :
+                state.score.blue > state.score.red ? 'BLUE WINS!' : 'DRAW!';
+      const wc = state.score.red > state.score.blue ? '#e74c3c' :
+                 state.score.blue > state.score.red ? '#3498db' : '#fff';
+      ctx.fillStyle = wc;
+      ctx.font = 'bold 56px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(w, cx, cy - 20);
+      ctx.fillStyle = '#fff'; ctx.font = '28px sans-serif';
+      ctx.fillText(`${state.score.red} — ${state.score.blue}`, cx, cy + 30);
+      ctx.font = '15px sans-serif'; ctx.fillStyle = '#aaa';
+      ctx.fillText('Press ESC to open lobby', cx, cy + 68);
+    }
+
+    // Pause dim
+    if (lobbyData && lobbyData.roomPhase === 'paused' && !lobbyVisible) {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#e67e22';
+      ctx.font = 'bold 44px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('PAUSED', cx, cy);
+    }
+
+    // Ping display (top-left, below HUD)
+    const pingColor = pingMs < 50 ? 'rgba(100,255,100,0.7)' : pingMs < 120 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
+    ctx.fillStyle = pingColor;
+    ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(`${pingMs}ms`, 8, 46);
+  }
+
+})();
+</script>
+</body>
+</html>
