@@ -230,43 +230,54 @@ function checkGoals(ball, goals) {
 function stepPhysics(state, map) {
   const gravity = map.gravity || { x: 0, y: 0 };
 
-  // All movable discs: balls + player discs
-  // All static discs: posts
-  // All walls: field walls + outer walls + net walls
-
-  // 1. Integrate: gravity, damping, position update
+  // 1. Apply gravity & damping once per tick (before substeps)
   for (const ball of state.balls) {
     ball.vx += gravity.x * ball.gravityScale;
     ball.vy += gravity.y * ball.gravityScale;
     ball.vx *= ball.damping;
     ball.vy *= ball.damping;
-    ball.x += ball.vx;
-    ball.y += ball.vy;
   }
 
   for (const disc of state.discs) {
     if (disc.isStatic) continue;
     disc.vx *= disc.damping;
     disc.vy *= disc.damping;
-    disc.x += disc.vx;
-    disc.y += disc.vy;
   }
 
-  // 2. Disc-wall collisions (all movable discs vs all walls, mask-filtered)
+  // 2. Calculate substeps: if any disc moves more than its radius per tick, subdivide
   const allMovable = [...state.balls, ...state.discs.filter(d => !d.isStatic)];
-  const allWalls = state.walls;
-
-  for (const disc of allMovable) {
-    for (const wall of allWalls) {
-      collideDiscWall(disc, wall);
-    }
+  let maxRatio = 0;
+  for (const d of allMovable) {
+    const speed = len(d.vx, d.vy);
+    const ratio = speed / d.radius;
+    if (ratio > maxRatio) maxRatio = ratio;
   }
+  const substeps = Math.min(8, Math.max(1, Math.ceil(maxRatio)));
+  const dt = 1 / substeps;
 
-  // 3. Disc-disc collisions (all discs including static posts, mask-filtered)
+  // 3. Substep loop: integrate position fractionally, then resolve collisions
+  const allWalls = state.walls;
   const allDiscs = [...state.balls, ...state.discs, ...state.posts];
-  for (let i = 0; i < allDiscs.length; i++) {
-    for (let j = i + 1; j < allDiscs.length; j++) {
-      collideDiscDisc(allDiscs[i], allDiscs[j]);
+
+  for (let step = 0; step < substeps; step++) {
+    // Position integration (fractional)
+    for (const d of allMovable) {
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+    }
+
+    // Disc-wall collisions
+    for (const disc of allMovable) {
+      for (const wall of allWalls) {
+        collideDiscWall(disc, wall);
+      }
+    }
+
+    // Disc-disc collisions
+    for (let i = 0; i < allDiscs.length; i++) {
+      for (let j = i + 1; j < allDiscs.length; j++) {
+        collideDiscDisc(allDiscs[i], allDiscs[j]);
+      }
     }
   }
 }
