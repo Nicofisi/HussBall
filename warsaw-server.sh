@@ -16,7 +16,16 @@
 set -e
 
 ZONE="europe-central2-a"   # Warsaw
-MACHINE_TYPE="e2-micro"    # cheapest general-purpose type
+# e2-micro/e2-small/e2-medium are ALL "shared-core" — burstable, credit-based
+# CPU, just with different baseline fractions (0.25/0.5/1 vCPU). The game's
+# tick loop is a tight setImmediate spin (see server.js runTick/tickLoop) that
+# pins a core near 100% constantly, which isn't "bursty" at all — it drains
+# the burst credit at a steady rate and then settles into a flat, throttled
+# ceiling once the credit runs out (that's the "works fine, then gets stuck at
+# a constant lower TPS" pattern — e2-medium just took longer to hit it than
+# e2-micro did). e2-standard-2 is the cheapest type with fully dedicated
+# (non-shared, non-credited) vCPUs, so there's no ceiling to hit at all.
+MACHINE_TYPE="e2-standard-2"
 PORT=3000
 MAX_RUN_SECONDS=5400       # 90 minutes
 REPO_URL="https://github.com/Nicofisi/HussBall.git"
@@ -70,7 +79,10 @@ apt-get install -y nodejs
 git clone --depth 1 "$REPO_URL" /opt/hussball
 cd /opt/hussball
 npm install --omit=dev
-PORT=$PORT nohup node server.js > /var/log/hussball.log 2>&1 &
+# SHOW_CPU_STAT is opt-in and off by default (it'd leak host load on a real
+# deploy) — safe to always enable here since this box is a disposable GCP
+# throwaway with no private VPS info to expose.
+PORT=$PORT SHOW_CPU_STAT=1 nohup node server.js > /var/log/hussball.log 2>&1 &
 # Backstop failsafe in case --max-run-duration isn't honored: hard self-shutdown.
 (sleep $MAX_RUN_SECONDS && shutdown -h now) &
 EOF

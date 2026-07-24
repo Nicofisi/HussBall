@@ -1565,6 +1565,12 @@
       const tickColor = tr > 55 ? 'rgba(100,255,100,0.7)' : tr > 40 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
       drawPerfSeg(`${tr}tps`, tickColor);
     }
+
+    if (latestState && latestState.cpu != null) {
+      const cpu = Math.round(latestState.cpu);
+      const cpuColor = cpu < 50 ? 'rgba(100,255,100,0.7)' : cpu < 85 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
+      drawPerfSeg(`${cpu}%cpu`, cpuColor);
+    }
   }
 
 })();

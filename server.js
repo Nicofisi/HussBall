@@ -17,6 +17,10 @@ const { MODIFIERS, MODIFIERS_BY_ID } = require('./shared/modifiers');
 // Config
 // ============================================================
 const PORT = process.env.PORT || 3000;
+// Off by default so a normal deploy never broadcasts host CPU load to every
+// client — only set this on throwaway boxes (e.g. warsaw-server.sh) where
+// there's no private VPS info to leak.
+const SHOW_CPU_STAT = process.env.SHOW_CPU_STAT === '1';
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
 const MOD_DURATION_TICKS = 20 * TICK_RATE;  // how long a modifier stays active
@@ -84,6 +88,11 @@ let roomEnabledModifiers = new Set(CLASSIC.modifiers || []);
 let measuredTickRate = TICK_RATE;
 let tickRateWindowStart = Date.now();
 let tickRateWindowCount = 0;
+
+// Opt-in only (SHOW_CPU_STAT=1) — process CPU time used since the last perf
+// window, normalized to one core (spikes over 100% would mean >1 core busy).
+let measuredCpuPercent = 0;
+let lastCpuUsage = SHOW_CPU_STAT ? process.cpuUsage() : null;
 
 // ============================================================
 // Lobby helpers
@@ -722,6 +731,7 @@ function sendGameState() {
     lastScorer: gameState.lastScorer,
     goalInfo: gameState.goalInfo || null,
     tickRate: Math.round(measuredTickRate * 10) / 10,
+    cpu: SHOW_CPU_STAT ? Math.round(measuredCpuPercent * 10) / 10 : undefined,
     map: currentMap.name,
     mapInfo: {
       w: currentMap.width,
@@ -1129,9 +1139,16 @@ function runTick() {
   const windowElapsed = now - tickRateWindowStart;
   if (windowElapsed >= 1000) {
     measuredTickRate = tickRateWindowCount * 1000 / windowElapsed;
+    let cpuLog = '';
+    if (SHOW_CPU_STAT) {
+      const cpuDiff = process.cpuUsage(lastCpuUsage);
+      lastCpuUsage = process.cpuUsage();
+      measuredCpuPercent = (cpuDiff.user + cpuDiff.system) / 1000 / windowElapsed * 100;
+      cpuLog = ` | cpu=${measuredCpuPercent.toFixed(1)}%`;
+    }
     console.log(
       `[perf] ${measuredTickRate.toFixed(1)} ticks/s | gameTick avg=${(perfTickSum / tickRateWindowCount).toFixed(2)}ms max=${perfTickMax.toFixed(2)}ms | ` +
-      `sendGameState avg=${(perfSendSum / tickRateWindowCount).toFixed(2)}ms max=${perfSendMax.toFixed(2)}ms | players=${players.size}`
+      `sendGameState avg=${(perfSendSum / tickRateWindowCount).toFixed(2)}ms max=${perfSendMax.toFixed(2)}ms | players=${players.size}${cpuLog}`
     );
     tickRateWindowCount = 0;
     tickRateWindowStart = now;
