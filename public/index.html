@@ -64,7 +64,12 @@
   #hud .modifier-event { font-size: 13px; font-weight: bold; }
   #hud .modifier-event.active { color: #ff9800; }
   #hud .modifier-event.pause { color: #888; }
-  #hud .hint { color: #666; font-size: 11px; position: absolute; right: 12px; }
+  #hud .hint {
+    color: #999; font-size: 11px; font-weight: normal; position: absolute; right: 12px;
+    background: transparent; border: 1px solid #444; border-radius: 4px;
+    padding: 4px 10px; cursor: pointer;
+  }
+  #hud .hint:hover { background: #0f3460; color: #fff; }
 
   /* ---- Lobby overlay ---- */
   #lobby-overlay {
@@ -78,6 +83,15 @@
     gap: 16px;
   }
   #lobby-overlay.visible { display: flex; }
+
+  #lobby-close {
+    position: absolute; top: 20px; right: 24px;
+    width: 44px; height: 44px; border-radius: 50%;
+    border: 1px solid #444; background: #16213e; color: #ccc;
+    font-size: 28px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #lobby-close:hover { background: #e94560; border-color: #e94560; color: #fff; }
 
   #lobby-overlay h2 {
     font-size: 28px; font-weight: 800;
@@ -339,10 +353,11 @@
   <span class="sb" id="score-blue">0</span>
   <span class="phase" id="phase-label"></span>
   <span class="modifier-event" id="modifier-event"></span>
-  <span class="hint">ESC = lobby</span>
+  <button type="button" class="hint" id="hud-lobby-btn" title="Open lobby (Esc)">☰ Lobby</button>
 </div>
 
 <div id="lobby-overlay">
+  <button id="lobby-close" title="Close lobby (Esc)">&times;</button>
   <h2><span class="red">Huss</span><span class="blue">Ball</span> Lobby</h2>
   <div class="admin-bar" id="admin-bar"></div>
   <div class="teams-container">
@@ -460,6 +475,8 @@
   const joinSpecBtn = document.getElementById('join-spec');
   const lobbyStatus = document.getElementById('lobby-status');
   const soundToggle = document.getElementById('sound-toggle');
+  const lobbyCloseBtn = document.getElementById('lobby-close');
+  const hudLobbyBtn = document.getElementById('hud-lobby-btn');
   const connToast   = document.getElementById('conn-toast');
   const chatContainer = document.getElementById('chat-container');
   const chatLogEl      = document.getElementById('chat-log');
@@ -862,11 +879,115 @@
     'Numpad0': 'kick',
   };
 
+  // ---- Gamepad support ----
+  // No events for stick tilt or (reliably) button state — has to be polled,
+  // so it's read once per rendered frame from the render loop below rather
+  // than reacting to discrete events like keyboard does.
+  let gamepadIndex = null;
+  window.addEventListener('gamepadconnected', e => { gamepadIndex = e.gamepad.index; });
+  window.addEventListener('gamepaddisconnected', e => {
+    if (gamepadIndex === e.gamepad.index) gamepadIndex = null;
+  });
+
+  const GAMEPAD_DEADZONE = 0.15;
+  // Radial deadzone: below the threshold reads as dead-still, above it the
+  // remaining travel is rescaled back up to the full 0-1 range so movement
+  // doesn't "jump" the instant the stick clears the deadzone.
+  function applyDeadzone(x, y, deadzone) {
+    const mag = Math.hypot(x, y);
+    if (mag < deadzone) return { x: 0, y: 0 };
+    const scale = Math.min(1, (mag - deadzone) / (1 - deadzone)) / mag;
+    return { x: x * scale, y: y * scale };
+  }
+
+  // Standard-mapped controllers expose the D-pad as buttons 12-15, but at
+  // least this Xbox controller over Bluetooth in Edge instead reports it as
+  // a single "hat switch" axis (axes[9]): 8 positions spaced evenly from -1
+  // (up) to 1 (up-left) going clockwise in steps of 2/7, with anything
+  // outside roughly [-1, 1] (this hardware sends garbage, not a clean
+  // sentinel) meaning neutral. Confirmed empirically: -1.00=up,
+  // -0.71=up-right, -0.43=right, 0.14=down. Both forms are checked below so
+  // whichever one a given controller/browser uses, it works.
+  function decodeDpadHat(v) {
+    if (v == null || v < -1.05 || v > 1.05) return { up: false, down: false, left: false, right: false };
+    const idx = Math.round((v + 1) * 3.5) & 7;
+    const dirs = [
+      { up: true }, { up: true, right: true }, { right: true }, { down: true, right: true },
+      { down: true }, { down: true, left: true }, { left: true }, { up: true, left: true },
+    ][idx];
+    return { up: !!dirs.up, down: !!dirs.down, left: !!dirs.left, right: !!dirs.right };
+  }
+
+  // Left stick gives an analog vector (finer low-speed control than a
+  // digital key can); D-pad is included too as a full-strength digital
+  // fallback, same feel as keyboard.
+  function readGamepadInput() {
+    if (gamepadIndex == null) return { x: 0, y: 0, kick: false };
+    const gp = navigator.getGamepads()[gamepadIndex];
+    if (!gp) return { x: 0, y: 0, kick: false };
+
+    const stick = applyDeadzone(gp.axes[0] || 0, gp.axes[1] || 0, GAMEPAD_DEADZONE);
+    let x = stick.x, y = stick.y;
+    const hat = decodeDpadHat(gp.axes[9]);
+    const dpadUp    = (gp.buttons[12] && gp.buttons[12].pressed) || hat.up;
+    const dpadDown  = (gp.buttons[13] && gp.buttons[13].pressed) || hat.down;
+    const dpadLeft  = (gp.buttons[14] && gp.buttons[14].pressed) || hat.left;
+    const dpadRight = (gp.buttons[15] && gp.buttons[15].pressed) || hat.right;
+    if (dpadUp)    y -= 1;
+    if (dpadDown)  y += 1;
+    if (dpadLeft)  x -= 1;
+    if (dpadRight) x += 1;
+
+    // A, B, RB all kick — buttons 0, 1, 7 (this controller's non-standard
+    // mapping puts RB at 7, not the W3C-standard 5). RT has no button at all
+    // under this mapping — confirmed empirically to be axes[4], ranging -1
+    // (released) to 1 (fully pressed); treat past the halfway point as
+    // pressed, same as a normal digital trigger click.
+    const kick = [0, 1, 7].some(i => gp.buttons[i] && gp.buttons[i].pressed) || (gp.axes[4] || -1) > 0;
+    return { x, y, kick };
+  }
+
+  // Start button (11) toggles the lobby, edge-triggered (rising edge only)
+  // so holding it doesn't flicker the overlay open/closed every frame.
+  let gpStartWasPressed = false;
+  function pollGamepadLobbyToggle() {
+    if (gamepadIndex == null) return;
+    const gp = navigator.getGamepads()[gamepadIndex];
+    if (!gp) return;
+    const pressed = !!(gp.buttons[11] && gp.buttons[11].pressed);
+    if (pressed && !gpStartWasPressed && hasJoined && connected) {
+      lobbyVisible = !lobbyVisible;
+      renderLobbyVisibility();
+    }
+    gpStartWasPressed = pressed;
+  }
+
+  // Recomputed every call (keyboard events, and once per frame from the
+  // render loop for the gamepad) rather than cached, since a gamepad's stick
+  // can drift without firing any discrete event to react to.
   function sendInput() {
-    const encoded = JSON.stringify({ type: 'input', ...keys });
+    let mx = 0, my = 0;
+    if (keys.up)    my -= 1;
+    if (keys.down)  my += 1;
+    if (keys.left)  mx -= 1;
+    if (keys.right) mx += 1;
+    const kbMag = Math.hypot(mx, my);
+    if (kbMag > 0) { mx /= kbMag; my /= kbMag; }
+
+    let kick = keys.kick;
+    if (!lobbyVisible) {
+      const gp = readGamepadInput();
+      mx += gp.x; my += gp.y;
+      kick = kick || gp.kick;
+    }
+    const mag = Math.hypot(mx, my);
+    if (mag > 1) { mx /= mag; my /= mag; }
+
+    const payload = { type: 'input', mx, my, kick };
+    const encoded = JSON.stringify(payload);
     if (encoded !== lastSentInput) {
       lastSentInput = encoded;
-      send({ type: 'input', ...keys });
+      send(payload);
     }
   }
 
@@ -887,6 +1008,16 @@
   joinRedBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'red' }));
   joinBlueBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'blue' }));
   joinSpecBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'spec' }));
+
+  lobbyCloseBtn.addEventListener('click', () => {
+    lobbyVisible = false;
+    renderLobbyVisibility();
+  });
+
+  hudLobbyBtn.addEventListener('click', () => {
+    lobbyVisible = true;
+    renderLobbyVisibility();
+  });
 
   // Sound toggle
   function updateSoundToggle() {
@@ -1204,6 +1335,10 @@
       displayFps = Math.round(fps);
       lastFpsDisplayUpdate = now;
     }
+    // Gamepad state has no events, so poll it once per rendered frame —
+    // sendInput() only actually sends when the computed vector changed.
+    if (hasJoined && connected) sendInput();
+    pollGamepadLobbyToggle();
     render();
     requestAnimationFrame(renderLoop);
   }
@@ -1305,8 +1440,13 @@
     for (const ln of (vis.lines || [])) {
       const a = ts(ln.x1, ln.y1);
       const b = ts(ln.x2, ln.y2);
-      ctx.strokeStyle = ln.color;
-      ctx.lineWidth = Math.max(1, (ln.width || 2) * scale);
+      // Center line doubles as the kickoff barrier (same tinting as the
+      // center circle below) — identified as the vertical line through x=0.
+      const isCenterLine = state.kickoffRestriction && ln.x1 === 0 && ln.x2 === 0;
+      ctx.strokeStyle = isCenterLine
+        ? (state.kickoffRestriction === 'red' ? '#e74c3c' : '#3498db')
+        : ln.color;
+      ctx.lineWidth = Math.max(1, (ln.width || 2) * scale * (isCenterLine ? 1.5 : 1));
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
 
@@ -1317,6 +1457,13 @@
       ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       if (c.fill) {
         ctx.fillStyle = c.fill; ctx.fill();
+      } else if (state.kickoffRestriction && c.x === 0 && c.y === 0) {
+        // Center circle doubles as the kickoff barrier — tint it with the
+        // restricted team's color so it's visually obvious why they can't
+        // cross, instead of feeling like an invisible wall.
+        ctx.strokeStyle = state.kickoffRestriction === 'red' ? '#e74c3c' : '#3498db';
+        ctx.lineWidth = Math.max(2, (c.width || 2) * scale * 1.5);
+        ctx.stroke();
       } else {
         ctx.strokeStyle = c.color;
         ctx.lineWidth = Math.max(1, (c.width || 2) * scale);
@@ -1362,6 +1509,61 @@
       ctx.beginPath(); ctx.arc(p.x, p.y, r - ballBorder, 0, Math.PI * 2);
       ctx.fillStyle = ball.color || '#fff';
       ctx.fill();
+
+      // Off-screen indicator — an arrow at the edge pointing toward the ball,
+      // sized/brightened by how far off it is. Most relevant in Volleyball,
+      // where a big vertical kick sends the ball far above the visible court
+      // (there's no ceiling wall for the ball there), but drawn for every
+      // mode since it's harmless whenever the ball's actually on-screen.
+      const EDGE_MARGIN = 26; // keeps the arrow fully inside the canvas, not clipped
+      // Extra clearance on top so the arrow lands below the semi-transparent
+      // #hud bar (40px tall) instead of getting visually buried under it.
+      const HUD_CLEARANCE = 40 + EDGE_MARGIN;
+      const boxLeft = EDGE_MARGIN, boxRight = W - EDGE_MARGIN;
+      const boxTop = HUD_CLEARANCE, boxBottom = H - EDGE_MARGIN;
+      const offLeft = p.x < boxLeft, offRight = p.x > boxRight;
+      const offTop = p.y < boxTop, offBottom = p.y > boxBottom;
+      if (offLeft || offRight || offTop || offBottom) {
+        const dx = p.x - cx, dy = p.y - cy;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0) {
+          const dirX = dx / dist, dirY = dy / dist;
+          // Where the ray from center crosses the (now asymmetric) inset
+          // box — standard "ray starts inside, find exit" slab method: for
+          // each axis the ray is actually moving toward, find the t that
+          // reaches that edge, then take the nearest one overall.
+          let t = Infinity;
+          if (dirX > 0) t = Math.min(t, (boxRight - cx) / dirX);
+          if (dirX < 0) t = Math.min(t, (boxLeft - cx) / dirX);
+          if (dirY > 0) t = Math.min(t, (boxBottom - cy) / dirY);
+          if (dirY < 0) t = Math.min(t, (boxTop - cy) / dirY);
+          const ex = cx + dirX * t, ey = cy + dirY * t;
+
+          // How far off-screen relative to the field's own size, so a
+          // barely-offscreen ball reads as subtle and a very distant one
+          // (e.g. a huge volleyball pop-up) reads as bigger/bolder.
+          const offDist = Math.max(0, dist - t);
+          const farness = Math.min(1, offDist / (fieldH * scale));
+          const arrowLen = 10 + farness * 8;
+          const arrowWidth = arrowLen * 0.65;
+
+          ctx.save();
+          ctx.globalAlpha = 0.55 + farness * 0.45;
+          ctx.translate(ex, ey);
+          ctx.rotate(Math.atan2(dirY, dirX));
+          ctx.beginPath();
+          ctx.moveTo(arrowLen, 0);
+          ctx.lineTo(-arrowLen * 0.4, arrowWidth);
+          ctx.lineTo(-arrowLen * 0.4, -arrowWidth);
+          ctx.closePath();
+          ctx.fillStyle = ball.color || '#fff';
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
     }
 
     // Players
@@ -1589,6 +1791,20 @@
       const cpu = Math.round(latestState.cpu);
       const cpuColor = cpu < 50 ? 'rgba(100,255,100,0.7)' : cpu < 85 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
       drawPerfSeg(`${cpu}%cpu`, cpuColor);
+    }
+
+    // F3 debug: raw gamepad state, so button/axis indices can be read off
+    // the screen directly instead of needing devtools open.
+    if (debugMode && gamepadIndex != null) {
+      const gp = navigator.getGamepads()[gamepadIndex];
+      if (gp) {
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fillText(`gamepad: "${gp.id}" mapping="${gp.mapping}"`, 8, perfY + 16);
+        const pressed = gp.buttons.map((b, i) => b.pressed ? i : null).filter(i => i !== null);
+        ctx.fillText(`buttons pressed: [${pressed.join(', ')}]`, 8, perfY + 32);
+        const axes = gp.axes.map((a, i) => `${i}:${a.toFixed(2)}`).join('  ');
+        ctx.fillText(`axes: ${axes}`, 8, perfY + 48);
+      }
     }
   }
 

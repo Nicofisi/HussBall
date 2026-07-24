@@ -262,6 +262,11 @@ function resetGame() {
     goalTimer: 0,
     lastScorer: null,
     goalInfo: null,
+    // Kickoff barrier (HaxBall-style): the team that just scored can't cross
+    // the halfway line or enter the center circle until the conceding team
+    // touches the ball. { team } while active, null once lifted/inactive.
+    // Only ever set when currentMap.kickoffRadius is configured.
+    kickoffRestriction: null,
     // Base (map-default) geometry — never mutated, modifiers derive from these.
     baseWalls: map.walls,
     baseGoals: map.goals,
@@ -415,9 +420,92 @@ function resetPositionsAfterGoal() {
   ball.vy = 0;
   ball.touches = [];
   gameState.goalInfo = null;
+  gameState.kickoffRestriction = (map.kickoffRadius && gameState.lastScorer)
+    ? { team: gameState.lastScorer }
+    : null;
   repositionPlayers();
   for (const p of players.values()) {
     if (p.disc) { p.disc.vx = 0; p.disc.vy = 0; }
+  }
+}
+
+// Real football kickoff rules: the team that just scored must retreat fully
+// behind the halfway line AND stay out of the center circle entirely, while
+// the conceding team — who takes the kickoff — is free anywhere on their own
+// half PLUS the entire circle (including the sliver of it on the opponent's
+// side, since the kickoff happens right there). Pushes any disc that's
+// currently violating its own rule back to the boundary and kills the
+// velocity component driving it further in, same feel as a 0-bounce wall.
+function enforceKickoffRestriction(state, map) {
+  const kr = state.kickoffRestriction;
+  if (!kr || !map.kickoffRadius) return;
+  const R = map.kickoffRadius;
+
+  for (const p of players.values()) {
+    if ((p.team !== 'red' && p.team !== 'blue') || !p.disc) continue;
+    const d = p.disc;
+    const legalSign = p.team === 'red' ? -1 : 1; // each team's own natural half
+    const lineLimit = legalSign * d.radius; // clamped by own radius, not just center
+
+    if (p.team === kr.team) {
+      // Scorer: full-body exclusion from the circle, so padded by their own
+      // radius (minDist = R + d.radius) — same treatment as the line below.
+      // Two passes because these are two combined constraints (fixing one
+      // can reintroduce a hair of the other right where they meet; exact
+      // convergence isn't needed since this reruns every tick at 60Hz).
+      const minDist = R + d.radius;
+      for (let pass = 0; pass < 2; pass++) {
+        const dist = Math.hypot(d.x, d.y);
+        if (dist < minDist) {
+          if (dist === 0) { d.x = 0; d.y = legalSign * -minDist; }
+          else { const s = minDist / dist; d.x *= s; d.y *= s; }
+          const vn = d.vx * (d.x / minDist) + d.vy * (d.y / minDist);
+          if (vn < 0) { d.vx -= vn * (d.x / minDist); d.vy -= vn * (d.y / minDist); }
+        }
+        const crossedLine = legalSign < 0 ? d.x > lineLimit : d.x < lineLimit;
+        if (crossedLine) {
+          d.x = lineLimit;
+          if (legalSign < 0 ? d.vx > 0 : d.vx < 0) d.vx = 0;
+        }
+      }
+    } else {
+      // Conceding team: legal region is "own half OR anywhere in the
+      // circle" — a non-convex union, so inside the circle nothing is
+      // enforced at all, and only once fully outside it do we check the
+      // line. "In the circle" means the disc's entire BODY within the drawn
+      // circle (radius R) — so the free-zone threshold is R - d.radius, not
+      // raw R: using raw R would let the far edge of the body poke out past
+      // the circle by a full radius before anything stopped it. Snapping
+      // straight to the line from just outside on the wrong side would
+      // teleport across the whole circle, so instead push to whichever of
+      // {nearest circle point, nearest line point} is actually closer —
+      // always a small correction, never a jump.
+      const innerR = R - d.radius;
+      const dist = Math.hypot(d.x, d.y);
+      if (dist < innerR) continue; // fully inside the drawn circle: no restriction
+      const crossedLine = legalSign < 0 ? d.x > lineLimit : d.x < lineLimit;
+      if (!crossedLine) continue; // outside circle, already on own side: fine
+
+      const s = dist > 0 ? innerR / dist : 0;
+      const circleX = d.x * s, circleY = dist > 0 ? d.y * s : -innerR;
+      const lineX = lineLimit, lineY = d.y;
+      const distToCircle = Math.hypot(circleX - d.x, circleY - d.y);
+      const distToLine = Math.abs(d.x - lineX);
+
+      if (distToCircle <= distToLine) {
+        d.x = circleX; d.y = circleY;
+        // Opposite sign from the scorer's circle push: here the player was
+        // OUTSIDE the circle and gets pulled back IN, so the illegal
+        // velocity component is the OUTWARD one (vn>0) — killing vn<0 (the
+        // legal inward direction) was the actual bug, letting outward
+        // velocity survive uncorrected every tick and ride along visually.
+        const vn = d.vx * (circleX / innerR) + d.vy * (circleY / innerR);
+        if (vn > 0) { d.vx -= vn * (circleX / innerR); d.vy -= vn * (circleY / innerR); }
+      } else {
+        d.x = lineX; d.y = lineY;
+        if (legalSign < 0 ? d.vx > 0 : d.vx < 0) d.vx = 0;
+      }
+    }
   }
 }
 
@@ -495,6 +583,11 @@ function recordTouch(ball, player, kind) {
   if (last && last.playerId === player.id && last.kind === kind && (now - last.time) < TOUCH_DEDUPE_MS) return;
   touches.push({ playerId: player.id, name: player.name, team: player.team, kind, time: now });
   if (touches.length > 8) touches.shift();
+
+  // Kickoff barrier lifts the instant the conceding team (not the team it
+  // currently restricts) touches the ball in any way — kick or passive contact.
+  const kr = gameState && gameState.kickoffRestriction;
+  if (kr && player.team !== kr.team) gameState.kickoffRestriction = null;
 }
 
 // Who gets credit for a goal, based on the scoring ball's touch history.
@@ -630,6 +723,7 @@ function gameTick() {
   }
 
   physics.stepPhysics(gameState, map);
+  enforceKickoffRestriction(gameState, map);
 
   // Passive ball-vs-player contacts detected during physics resolution — feed
   // them into the same touch history used for goal/assist attribution. Also
@@ -749,6 +843,7 @@ function sendGameState() {
     timer: gameState.timer,
     kicked: gameState.kicked || false,
     lastScorer: gameState.lastScorer,
+    kickoffRestriction: gameState.kickoffRestriction ? gameState.kickoffRestriction.team : null,
     goalInfo: gameState.goalInfo || null,
     tickRate: Math.round(measuredTickRate * 10) / 10,
     cpu: SHOW_CPU_STAT ? Math.round(measuredCpuPercent * 10) / 10 : undefined,
@@ -997,13 +1092,15 @@ function handleInput(playerId, data) {
   if (roomPhase !== 'playing') return;
   const player = players.get(playerId);
   if (!player) return;
-  player.input = {
-    up: !!data.up,
-    down: !!data.down,
-    left: !!data.left,
-    right: !!data.right,
-    kick: !!data.kick,
-  };
+  let mx = Number(data.mx) || 0;
+  let my = Number(data.my) || 0;
+  // Clamp magnitude to 1 — mx/my come straight from the client (keyboard unit
+  // vectors or a gamepad's analog stick), so an untrusted/broken client could
+  // otherwise claim a vector longer than any real input can produce and move
+  // faster than a full-tilt stick should allow.
+  const mag = Math.sqrt(mx * mx + my * my);
+  if (mag > 1) { mx /= mag; my /= mag; }
+  player.input = { mx, my, kick: !!data.kick };
 }
 
 const CHAT_COOLDOWN_MS = 300;

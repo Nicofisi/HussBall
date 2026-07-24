@@ -401,18 +401,16 @@ function tryKick(player, ball, playerCfg) {
 // damping (both push the equilibrium up); to change responsiveness/tap
 // precision without changing top speed, adjust both together to keep the
 // equilibrium constant.
+// input.mx/my is an analog movement vector, magnitude in [0,1] (server.js's
+// handleInput clamps it there before it ever reaches here). Keyboard sends a
+// unit-length vector in one of 8 directions (full acceleration always, same
+// as the old boolean model); a gamepad stick can send any magnitude in
+// between, giving finer low-speed control that a digital key can't.
 function applyInput(disc, input, playerCfg) {
-  let ax = 0, ay = 0;
-  if (input.up)    ay -= 1;
-  if (input.down)  ay += 1;
-  if (input.left)  ax -= 1;
-  if (input.right) ax += 1;
-
-  const l = len(ax, ay);
-  if (l > 0) {
-    ax = (ax / l) * playerCfg.acceleration;
-    ay = (ay / l) * playerCfg.acceleration;
-  }
+  const mx = input.mx || 0;
+  const my = input.my || 0;
+  const ax = mx * playerCfg.acceleration;
+  const ay = my * playerCfg.acceleration;
 
   disc.vx = (disc.vx + ax) * playerCfg.damping;
   disc.vy = (disc.vy + ay) * playerCfg.damping;

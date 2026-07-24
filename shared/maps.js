@@ -79,6 +79,10 @@ const CLASSIC = {
   height: 400,
   spawnDistance: 170,
   playerBorder: 50,
+  // Kickoff barrier radius — matches the drawn center circle below. Whichever
+  // team just scored can't cross x=0 or enter this circle until the
+  // conceding team touches the ball (see enforceKickoffRestriction, server.js).
+  kickoffRadius: 90,
 
   ball: {
     x: 0, y: 0,
@@ -144,7 +148,7 @@ const CLASSIC = {
     ],
     circles: [
       // Center circle
-      { x: 0, y: 0, radius: 60, color: 'rgba(255,255,255,0.25)', width: 4 },
+      { x: 0, y: 0, radius: 90, color: 'rgba(255,255,255,0.25)', width: 4 },
     ],
   },
 };
@@ -158,6 +162,7 @@ const FUTSAL = {
   height: 310,
   spawnDistance: 140,
   playerBorder: 45,
+  kickoffRadius: 75, // matches the drawn center circle below — see Classic's comment
 
   ball: {
     x: 0, y: 0,
@@ -220,7 +225,7 @@ const FUTSAL = {
       { x1: 335, y1:  60, x2: 310, y2:  60, color: 'rgba(52,152,219,0.5)', width: 4 },
     ],
     circles: [
-      { x: 0, y: 0, radius: 50, color: 'rgba(255,255,255,0.25)', width: 4 },
+      { x: 0, y: 0, radius: 75, color: 'rgba(255,255,255,0.25)', width: 4 },
     ],
   },
 };
@@ -330,6 +335,7 @@ const CHAOS = {
   playerBorder: 50,
   goalY: 80,      // half-height of the goal mouth — named so modifiers (bigGoals) can scale it
   netDepth: 30,   // how far the goal net extends past the boundary — needed to regenerate walls
+  kickoffRadius: 90, // matches the drawn center circle below — see Classic's comment
 
   ball: {
     x: 0, y: 0,
@@ -401,7 +407,7 @@ const CHAOS = {
     goalNetLines: makeGoalNetLines(420, 30, 80, 'rgba(231,76,60,0.5)', 'rgba(52,152,219,0.5)'),
     circles: [
       // Center circle
-      { x: 0, y: 0, radius: 60, color: 'rgba(255,255,255,0.25)', width: 4 },
+      { x: 0, y: 0, radius: 90, color: 'rgba(255,255,255,0.25)', width: 4 },
     ],
   },
 };
