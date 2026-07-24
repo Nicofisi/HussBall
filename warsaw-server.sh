@@ -16,16 +16,17 @@
 set -e
 
 ZONE="europe-central2-a"   # Warsaw
-# e2-micro/e2-small/e2-medium are ALL "shared-core" — burstable, credit-based
-# CPU, just with different baseline fractions (0.25/0.5/1 vCPU). The game's
-# tick loop is a tight setImmediate spin (see server.js runTick/tickLoop) that
-# pins a core near 100% constantly, which isn't "bursty" at all — it drains
-# the burst credit at a steady rate and then settles into a flat, throttled
-# ceiling once the credit runs out (that's the "works fine, then gets stuck at
-# a constant lower TPS" pattern — e2-medium just took longer to hit it than
-# e2-micro did). e2-standard-2 is the cheapest type with fully dedicated
-# (non-shared, non-credited) vCPUs, so there's no ceiling to hit at all.
-MACHINE_TYPE="e2-standard-2"
+# e2-micro/e2-small/e2-medium are all "shared-core" — burstable, credit-based
+# CPU with different baseline fractions (0.25/0.5/1 vCPU). That USED to be a
+# problem here because the tick loop was a tight setImmediate spin (see
+# server.js tickLoop) that pinned a core near 100% permanently — not "bursty"
+# at all, so it drained burst credit at a steady rate and settled into a flat,
+# throttled ceiling once the credit ran out. The tick loop is now sleep-based
+# on Linux (only Windows still spins), so real CPU use is ~10% instead of
+# ~100% — comfortably under even e2-small's ~50% baseline, so it never touches
+# the credit ceiling. e2-small is the cheap shared-core tier with enough
+# headroom for real gameplay spikes above that baseline.
+MACHINE_TYPE="e2-small"
 PORT=3000
 MAX_RUN_SECONDS=5400       # 90 minutes
 REPO_URL="https://github.com/Nicofisi/HussBall.git"
