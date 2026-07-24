@@ -164,23 +164,38 @@ function randomizeTeams(includeSpectators) {
 // ============================================================
 // Game State
 // ============================================================
-// Builds static goalpost/obstacle physics discs from plain specs
-// ({x,y,radius,bounce,color,cGroup,cMask}) — used both for the map's own
-// posts and for modifier-contributed obstacles (e.g. bumpers).
+// Builds static goalpost/obstacle physics objects from plain specs — a
+// circle ({x,y,radius,bounce,color,cGroup,cMask}), a rounded rectangle
+// (spec.shape 'rect': {x,y,w,h,cornerRadius,...}), or a convex polygon
+// (spec.shape 'poly': {x,y,points,cornerRadius,...}). Used both for the
+// map's own posts and for modifier-contributed obstacles (e.g. bumpers).
 function buildPostDiscs(specs) {
   return specs.map(p => {
-    const disc = physics.createDisc({
-      x: p.x, y: p.y,
-      radius: p.radius,
-      bounce: p.bounce,
-      color: p.color,
-      isStatic: true,
-      mass: 999,
-      cGroup: p.cGroup ?? C.POST,
-      cMask: p.cMask ?? (C.BALL | C.PLAYER),
-    });
-    disc.isBumper = !!p.isBumper; // tags obstacle discs so the client can flash them on impact
-    return disc;
+    const obj = (p.shape === 'rect')
+      ? physics.createRectObstacle({
+          x: p.x, y: p.y, w: p.w, h: p.h, cornerRadius: p.cornerRadius,
+          bounce: p.bounce, color: p.color,
+          cGroup: p.cGroup, cMask: p.cMask,
+        })
+      : (p.shape === 'poly')
+      ? physics.createPolygonObstacle({
+          x: p.x, y: p.y, points: p.points, cornerRadius: p.cornerRadius,
+          bounce: p.bounce, color: p.color,
+          cGroup: p.cGroup, cMask: p.cMask,
+        })
+      : physics.createDisc({
+          x: p.x, y: p.y,
+          radius: p.radius,
+          bounce: p.bounce,
+          color: p.color,
+          isStatic: true,
+          mass: 999,
+          cGroup: p.cGroup ?? C.POST,
+          cMask: p.cMask ?? (C.BALL | C.PLAYER),
+        });
+    obj.isBumper = !!p.isBumper; // tags obstacle objects so the client can flash them on impact
+    obj.isKicker = !!p.isKicker; // tags "kicker" obstacles that actively kick the ball on contact
+    return obj;
   });
 }
 
@@ -394,6 +409,32 @@ function resetPositionsAfterGoal() {
 // Modifier system — picks a random enabled modifier from shared/modifiers.js,
 // runs it for MOD_DURATION_TICKS, then pauses MOD_PAUSE_TICKS before the next.
 // ============================================================
+// Ends whatever modifier is active (if any) and immediately activates a new
+// random one from the enabled pool, skipping the pause — shared by the
+// natural end-of-pause transition and the admin "skip to next modifier" cheat.
+function endActiveAndStartNext(state, map) {
+  const m = state.modifier;
+  if (!m) return;
+  if (m.active) {
+    if (m.active.deactivate) m.active.deactivate(state, map);
+    m.active = null;
+    rebuildGeometry();
+  }
+  const pool = (map.modifiers || [])
+    .filter(id => roomEnabledModifiers.has(id))
+    .map(id => MODIFIERS_BY_ID[id])
+    .filter(Boolean);
+  if (pool.length) {
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+    m.active = chosen;
+    if (chosen.activate) chosen.activate(state, map);
+    rebuildGeometry();
+    m.timer = MOD_DURATION_TICKS;
+  } else {
+    m.timer = MOD_PAUSE_TICKS; // nothing enabled — stay idle, check again later
+  }
+}
+
 function runModifierStep(state, map) {
   const m = state.modifier;
   if (!m) return;
@@ -405,19 +446,7 @@ function runModifierStep(state, map) {
       rebuildGeometry();
       m.timer = MOD_PAUSE_TICKS;
     } else {
-      const pool = (map.modifiers || [])
-        .filter(id => roomEnabledModifiers.has(id))
-        .map(id => MODIFIERS_BY_ID[id])
-        .filter(Boolean);
-      if (pool.length) {
-        const chosen = pool[Math.floor(Math.random() * pool.length)];
-        m.active = chosen;
-        if (chosen.activate) chosen.activate(state, map);
-        rebuildGeometry();
-        m.timer = MOD_DURATION_TICKS;
-      } else {
-        m.timer = MOD_PAUSE_TICKS; // nothing enabled — stay idle, check again later
-      }
+      endActiveAndStartNext(state, map);
     }
   }
   if (m.active && m.active.tick) m.active.tick(state, map);
@@ -574,10 +603,28 @@ function gameTick() {
   physics.stepPhysics(gameState, map);
 
   // Passive ball-vs-player contacts detected during physics resolution — feed
-  // them into the same touch history used for goal/assist attribution.
+  // them into the same touch history used for goal/assist attribution. Also
+  // apply an active kick impulse for "kicker" bumper obstacles (dark green,
+  // Bumpers modifier) — they don't have an ownerId so they never earn touch
+  // credit, they just shove the ball like a player's kick would.
+  const kickedPairs = new Set();
   for (const hit of gameState.ballHits) {
     const owner = hit.disc.ownerId != null ? players.get(hit.disc.ownerId) : null;
     if (owner) recordTouch(hit.ball, owner, 'touch');
+
+    if (hit.disc.isKicker) {
+      // Dedupe per (ball, kicker) per tick — a slow graze can register a hit
+      // on more than one substep within the same tick, and without this a
+      // single contact could apply the kick force multiple times over.
+      const key = gameState.balls.indexOf(hit.ball) + ':' + gameState.posts.indexOf(hit.disc);
+      if (!kickedPairs.has(key)) {
+        kickedPairs.add(key);
+        const n = physics.normalize(hit.ball.x - hit.disc.x, hit.ball.y - hit.disc.y);
+        hit.ball.vx += n.x * map.player.kickForce;
+        hit.ball.vy += n.y * map.player.kickForce;
+        gameState.kicked = true;
+      }
+    }
   }
 
   // Only check goals during normal play (not during goal celebration)
@@ -682,10 +729,21 @@ function sendGameState() {
       bg: gameState.bg,
       goals: gameState.goals,
       visual: gameState.visual,
-      posts: gameState.posts.map(p => ({
+      posts: gameState.posts.map(p => p.isRect ? {
+        shape: 'rect',
+        x: p.x, y: p.y, w: p.halfW * 2, h: p.halfH * 2, cornerRadius: p.cornerRadius,
+        color: p.color,
+        flash: hitBumpers.has(p),
+      } : p.isPoly ? {
+        shape: 'poly',
+        points: p.worldPoints, cornerRadius: p.cornerRadius,
+        color: p.color,
+        flash: hitBumpers.has(p),
+      } : {
+        shape: 'circle',
         x: p.x, y: p.y, radius: p.radius, color: p.color,
         flash: hitBumpers.has(p),
-      })),
+      }),
       walls: gameState.walls.map(w => ({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, cGroup: w.cGroup })),
       kickRadius: currentMap.player.kickRadius,
     },
@@ -973,6 +1031,16 @@ function handleCheat(playerId, data) {
       player.boostVy = ny * 12;
     }
     console.log(`[CHEAT] ${player.name} boosted`);
+  }
+
+  if (data.cheat === 'skipModifier') {
+    // Ends the current modifier (if any) and immediately starts the next
+    // enabled one, skipping the pause — only meaningful on a map that has a
+    // modifier pool at all.
+    if (gameState.modifier) {
+      endActiveAndStartNext(gameState, map);
+      console.log(`[CHEAT] ${player.name} skipped to next modifier`);
+    }
   }
 }
 

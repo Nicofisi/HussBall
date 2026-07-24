@@ -23,6 +23,7 @@
 
 const physics = require('./physics');
 const { makeWalls, makeGoalNetLines } = require('./maps');
+const { WALL_TIER_BOUNCE } = require('./bumperLayouts');
 
 // Reads the red/blue net-outline colors straight out of the map's own base
 // visual data (rather than hardcoding the same hex/rgba strings a second
@@ -53,29 +54,20 @@ function spawnExtraBall(state, map) {
 
 const MODIFIERS = [
   {
-    id: 'bouncyWalls',
-    name: 'Bouncy Walls',
-    desc: 'Walls accelerate the ball!',
-    icon: '🧱',
-    // Applied every tick (not just on activate) so a ball that spawns mid-event
-    // (e.g. via the extraBall admin cheat) still picks up the effect.
-    tick(state) {
-      for (const ball of state.balls) ball.bounce = 2.2;
-    },
-    deactivate(state, map) {
-      for (const ball of state.balls) ball.bounce = map.ball.bounce;
-    },
-  },
-  {
     id: 'playerBounce',
     name: 'Bumper Players',
     desc: 'Players bounce off each other!',
     icon: '💥',
+    // Uses bounceOverride (not .bounce) — that only kicks in when BOTH
+    // colliding discs have it set, so this only makes player-vs-player hits
+    // bouncy. Player-vs-ball keeps using each player's normal .bounce
+    // (untouched here), so the ball doesn't bounce off players any harder
+    // than it would with this modifier off.
     tick(state) {
-      for (const disc of state.discs) if (!disc.isStatic) disc.bounce = 2.5;
+      for (const disc of state.discs) if (!disc.isStatic) disc.bounceOverride = 10.0;
     },
     deactivate(state) {
-      for (const disc of state.discs) if (!disc.isStatic) disc.bounce = 0.5;
+      for (const disc of state.discs) if (!disc.isStatic) disc.bounceOverride = undefined;
     },
   },
   {
@@ -162,15 +154,77 @@ const MODIFIERS = [
   {
     id: 'bumpers',
     name: 'Bumpers',
-    desc: 'Obstacles appear on the pitch!',
+    desc: 'Obstacles appear on the pitch — and the walls turn bouncy too!',
     icon: '🟣',
+    // Deliberately does NOT touch ball.bounce (that's how bouncyWalls used to
+    // work before it was folded in here) — boosting the ball's own bounce
+    // makes it bouncy against *everything* it collides with, including
+    // players, which felt wrong (the ball shouldn't bounce off a player just
+    // because Bumpers is active). Wall bounciness instead comes from boosting
+    // the WALL segments' own `bounce` field (only the field-boundary
+    // segments, cGroup WALL — not the goal nets, which stay soft on purpose),
+    // at the same WALL_TIER_BOUNCE used by the teal "soft bumper" obstacle
+    // kind, so they read as the same phenomenon. Obstacle bounciness comes
+    // from each obstacle's own `bounce` value (see shared/bumperLayouts.js).
     activate(state, map) {
       const layouts = map.bumperLayouts || [];
       const layout = layouts.length ? layouts[Math.floor(Math.random() * layouts.length)] : [];
       state.modifierExtras.postSpecs = [...state.basePostSpecs, ...layout];
+      state.modifierExtras.walls = state.baseWalls.map(w =>
+        w.cGroup === physics.C.WALL ? { ...w, bounce: WALL_TIER_BOUNCE } : w
+      );
     },
     deactivate(state) {
       state.modifierExtras.postSpecs = null;
+      state.modifierExtras.walls = null;
+    },
+  },
+  {
+    id: 'verticalGoals',
+    name: 'Vertical Goals',
+    desc: 'Goals moved to the top and bottom!',
+    icon: '↕️',
+    // Reuses makeWalls/makeGoalNetLines by generating them for a field with
+    // width/height swapped (which puts their goal gap on what would be the
+    // "left/right" edges), then swapping x↔y on every resulting coordinate —
+    // that swap turns "goal gap on left/right of a H×W field" into "goal gap
+    // on top/bottom of a W×H field". Cheaper and less error-prone than writing
+    // a second, parallel set of geometry generators.
+    activate(state, map) {
+      const swapXY = (seg) => ({ ...seg, x1: seg.y1, y1: seg.x1, x2: seg.y2, y2: seg.x2 });
+
+      state.modifierExtras.walls = makeWalls(
+        map.height, map.width, map.goalY, map.netDepth, map.playerBorder
+      ).map(swapXY);
+
+      const hh = map.height / 2, gy = map.goalY;
+      state.modifierExtras.goals = [
+        { team: 'red',  axis: 'y', y: -hh, x1: -gy, x2: gy },
+        { team: 'blue', axis: 'y', y:  hh, x1: -gy, x2: gy },
+      ];
+
+      // basePostSpecs is always [redTop, redBottom, blueTop, blueBottom] (see
+      // any map's `posts` array) — reposition each to its new top/bottom slot,
+      // keeping its original radius/bounce/color/cGroup/cMask.
+      const base = state.basePostSpecs;
+      state.modifierExtras.postSpecs = [
+        { ...base[0], x: -gy, y: -hh },
+        { ...base[1], x:  gy, y: -hh },
+        { ...base[2], x: -gy, y:  hh },
+        { ...base[3], x:  gy, y:  hh },
+      ];
+
+      const colors = baseNetColors(state);
+      state.modifierExtras.visual = {
+        goalNetLines: makeGoalNetLines(map.height / 2, map.netDepth, map.goalY, colors.red, colors.blue)
+          .map(swapXY),
+      };
+    },
+    deactivate(state) {
+      state.modifierExtras.walls = null;
+      state.modifierExtras.goals = null;
+      state.modifierExtras.postSpecs = null;
+      state.modifierExtras.visual = null;
     },
   },
 ];

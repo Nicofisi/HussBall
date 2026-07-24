@@ -8,6 +8,7 @@
 'use strict';
 
 const { C } = (typeof require !== 'undefined') ? require('./physics') : { C: window.C };
+const bumperLayoutsModule = (typeof require !== 'undefined') ? require('./bumperLayouts') : { LAYOUTS: [] };
 
 // Helper: generate standard walls for a rectangular pitch with goals
 function makeWalls(w, h, goalY, netDepth, playerBorder) {
@@ -88,7 +89,7 @@ const CLASSIC = {
     color: '#ffffff',
     gravityScale: 0,
     cGroup: C.BALL,
-    cMask: C.PLAYER | C.WALL | C.POST | C.NET,
+    cMask: C.BALL | C.PLAYER | C.WALL | C.POST | C.NET,
   },
 
   player: {
@@ -167,7 +168,7 @@ const FUTSAL = {
     color: '#ffffcc',
     gravityScale: 0,
     cGroup: C.BALL,
-    cMask: C.PLAYER | C.WALL | C.POST | C.NET,
+    cMask: C.BALL | C.PLAYER | C.WALL | C.POST | C.NET,
   },
 
   player: {
@@ -248,7 +249,7 @@ const VOLLEYBALL = {
     gravityScale: 2,
     cGroup: C.BALL,
     // NO C.PLAYER here: ball passes through players (only kick moves it)
-    cMask: C.WALL | C.POST | C.NET,
+    cMask: C.BALL | C.WALL | C.POST | C.NET,
   },
 
   player: {
@@ -335,7 +336,7 @@ const CHAOS = {
     color: '#ffffff',
     gravityScale: 0,
     cGroup: C.BALL,
-    cMask: C.PLAYER | C.WALL | C.POST | C.NET,
+    cMask: C.BALL | C.PLAYER | C.WALL | C.POST | C.NET,
   },
 
   player: {
@@ -379,26 +380,12 @@ const CHAOS = {
 
   // --- Modifier system: which modifiers from shared/modifiers.js are eligible
   // to fire on this map (admin can further narrow this at runtime) ---
-  modifiers: ['bouncyWalls', 'playerBounce', 'twoBalls', 'bigGoals', 'switchSides', 'bumpers'],
+  modifiers: ['playerBounce', 'twoBalls', 'bigGoals', 'switchSides', 'verticalGoals', 'bumpers'],
 
-  // Preset obstacle layouts for the 'bumpers' modifier — one is picked at random
-  // when it activates. Plain post specs (cGroup/cMask default to POST/BALL|PLAYER).
-  // isBumper tags them so the client can flash them on ball impact.
-  bumperLayouts: [
-    [
-      { x: -150, y: -100, radius: 34, bounce: 3.5, color: '#9b59b6', isBumper: true },
-      { x: 150,  y: 100,  radius: 34, bounce: 3.5, color: '#9b59b6', isBumper: true },
-    ],
-    [
-      { x: 0, y: -120, radius: 38, bounce: 3.5, color: '#9b59b6', isBumper: true },
-      { x: 0, y: 120,  radius: 38, bounce: 3.5, color: '#9b59b6', isBumper: true },
-    ],
-    [
-      { x: -180, y: 0, radius: 32, bounce: 3.5, color: '#9b59b6', isBumper: true },
-      { x: 180,  y: 0, radius: 32, bounce: 3.5, color: '#9b59b6', isBumper: true },
-      { x: 0,    y: 0, radius: 32, bounce: 3.5, color: '#9b59b6', isBumper: true },
-    ],
-  ],
+  // Preset obstacle layouts for the 'bumpers' modifier — one is picked at
+  // random when it activates. Lives in its own file (shared/bumperLayouts.js)
+  // since the layout list is large and keeps growing.
+  bumperLayouts: bumperLayoutsModule.LAYOUTS,
 
   visual: {
     lines: [
