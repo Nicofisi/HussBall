@@ -380,7 +380,7 @@ const CHAOS = {
 
   // --- Modifier system: which modifiers from shared/modifiers.js are eligible
   // to fire on this map (admin can further narrow this at runtime) ---
-  modifiers: ['playerBounce', 'twoBalls', 'bigGoals', 'switchSides', 'verticalGoals', 'bumpers'],
+  modifiers: ['playerBounce', 'twoBalls', 'bigGoals', 'switchSides', 'verticalGoals', 'bumpers', 'goalPull'],
 
   // Preset obstacle layouts for the 'bumpers' modifier — one is picked at
   // random when it activates. Lives in its own file (shared/bumperLayouts.js)

@@ -52,7 +52,42 @@ function spawnExtraBall(state, map) {
   state.balls.push(ball);
 }
 
+// Small, constant-magnitude nudge applied every tick to whichever ball is
+// affected by goalPull — deliberately NOT distance-scaled (no inverse-square
+// falloff) so it reads as a gentle, uniform "current" toward goal rather than
+// a snowballing force near the net. Kept deliberately faint — barely
+// perceptible over a few seconds, trivially overpowered by any real kick.
+const GOAL_PULL_ACCEL = 0.04;
+
 const MODIFIERS = [
+  {
+    id: 'goalPull',
+    name: 'Magnetic Goals',
+    desc: 'The ball drifts gently toward the nearest goal!',
+    icon: '🧲',
+    tick(state) {
+      const goals = (state.goals || []).filter(g => !g.isVolleyball);
+      if (!goals.length) return;
+      for (const ball of state.balls) {
+        // Untouched since kickoff/reset (server.js clears ball.touches to []
+        // on every goal reset, and lazily creates it on first touch) — leave
+        // it dead still until someone actually makes contact with it.
+        if (!ball.touches || ball.touches.length === 0) continue;
+        let nearest = null, nearestDistSq = Infinity;
+        for (const goal of goals) {
+          const gx = goal.axis === 'y' ? (goal.x1 + goal.x2) / 2 : goal.x;
+          const gy = goal.axis === 'y' ? goal.y : (goal.y1 + goal.y2) / 2;
+          const dx = gx - ball.x, dy = gy - ball.y;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < nearestDistSq) { nearestDistSq = distSq; nearest = { gx, gy }; }
+        }
+        if (!nearest || nearestDistSq < 1) continue;
+        const dist = Math.sqrt(nearestDistSq);
+        ball.vx += (nearest.gx - ball.x) / dist * GOAL_PULL_ACCEL;
+        ball.vy += (nearest.gy - ball.y) / dist * GOAL_PULL_ACCEL;
+      }
+    },
+  },
   {
     id: 'playerBounce',
     name: 'Bumper Players',
