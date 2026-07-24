@@ -131,16 +131,28 @@
   .admin-bar .btn-group button:first-child { border-radius: 5px 0 0 5px; margin-left: 0; }
   .admin-bar .btn-group button:last-child { border-radius: 0 5px 5px 0; }
   .admin-bar .mod-list {
-    display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px;
+    display: grid; grid-template-columns: max-content max-content; justify-content: center;
+    align-items: center; column-gap: 10px; row-gap: 5px;
     font-size: 12px; color: #999;
-    border: 1px solid #333; border-radius: 5px; padding: 4px 8px;
+    border: 1px solid #333; border-radius: 5px; padding: 6px 10px;
     flex-basis: 100%;   /* always starts its own row, never crammed onto the controls line */
   }
-  .admin-bar .mod-chip {
-    display: inline-flex; align-items: center; gap: 3px;
-    font-size: 11px; color: #ccc; cursor: pointer; white-space: nowrap;
+  .admin-bar .mod-list-title { grid-column: 1 / -1; }
+  .admin-bar .mod-chip { display: contents; }   /* children become direct grid items, one modifier per row */
+  .admin-bar .mod-chip .mod-name {
+    font-size: 11px; color: #ccc; white-space: nowrap; justify-self: start;
   }
-  .admin-bar .mod-chip input { cursor: pointer; }
+  .admin-bar .mod-chip .mod-weight-group { display: flex; gap: 2px; justify-self: end; }
+  .admin-bar .mod-chip .mod-weight-btn {
+    width: 20px; height: 20px; padding: 0; line-height: 18px;
+    font-size: 10px; text-align: center;
+    border: 1px solid #444; border-radius: 3px;
+    background: #16213e; color: #ccc; cursor: pointer;
+  }
+  .admin-bar .mod-chip .mod-weight-btn:hover { background: #0f3460; }
+  .admin-bar .mod-chip .mod-weight-btn.active {
+    background: #e94560; border-color: #e94560; color: #fff; font-weight: bold;
+  }
 
   /* Team columns */
   .teams-container {
@@ -891,7 +903,7 @@
   function renderLobby() {
     if (!lobbyData) return;
     const { players, adminId, freeJoin, currentMap, maps, roomPhase, scoreLimit, timeLimit,
-            availableModifiers, enabledModifiers } = lobbyData;
+            availableModifiers, modifierWeights } = lobbyData;
     const iAmAdmin = myId === adminId;
 
     // Disable join buttons if freeJoin is off and not admin
@@ -905,9 +917,9 @@
     // inside it (Goals/Time) — lobby broadcasts arrive often (ping updates
     // land ~1/sec per player) and a full innerHTML rebuild would wipe out
     // in-progress, not-yet-committed keystrokes. Deliberately narrow (number
-    // inputs only, not the map <select> or checkboxes) — those don't accumulate
-    // uncommitted state, and guarding them just delayed the modifier checklist
-    // from appearing right after picking a map.
+    // inputs only, not the map <select> or modifier weight buttons) — those
+    // don't accumulate uncommitted state, and guarding them just delayed the
+    // modifier list from appearing right after picking a map.
     const active = document.activeElement;
     const editingAdminBar = active && active.tagName === 'INPUT' && active.type === 'number' && adminBarEl.contains(active);
     if (!editingAdminBar) {
@@ -941,13 +953,18 @@
       ab += `<button class="${freeJoin ? 'active' : ''}" data-action="toggleFJ">${freeJoin ? 'Free Join: ON' : 'Free Join: OFF'}</button>`;
 
       if (availableModifiers && availableModifiers.length) {
-        ab += '<span class="mod-list">Modifiers:';
+        ab += '<div class="mod-list"><span class="mod-list-title">Modifiers (weight, 0=off):</span>';
         availableModifiers.forEach(m => {
-          const checked = enabledModifiers.includes(m.id) ? 'checked' : '';
-          ab += `<label class="mod-chip" title="${escHTML(m.desc)}">` +
-                `<input type="checkbox" data-mod="${m.id}" ${checked}>${m.icon || ''} ${escHTML(m.name)}</label>`;
+          const weight = modifierWeights[m.id] ?? 0;
+          ab += `<div class="mod-chip" title="${escHTML(m.desc)}">` +
+                `<span class="mod-name">${m.icon || ''} ${escHTML(m.name)}</span>` +
+                `<span class="mod-weight-group" data-mod="${m.id}">` +
+                Array.from({ length: 10 }, (_, i) =>
+                  `<button type="button" class="mod-weight-btn${i === weight ? ' active' : ''}" data-weight="${i}">${i}</button>`
+                ).join('') +
+                `</span></div>`;
         });
-        ab += '</span>';
+        ab += '</div>';
       }
     } else {
       ab += `<span style="color:#888;font-size:13px;">Map: ${escHTML(currentMap)}</span>`;
@@ -956,7 +973,7 @@
         ab += '<span style="color:#e67e22;font-size:13px;font-weight:bold;">PAUSED</span>';
       }
       if (availableModifiers && availableModifiers.length) {
-        const names = availableModifiers.filter(m => enabledModifiers.includes(m.id)).map(m => m.icon || m.name).join(' ');
+        const names = availableModifiers.filter(m => (modifierWeights[m.id] ?? 0) > 0).map(m => m.icon || m.name).join(' ');
         ab += `<span style="color:#888;font-size:12px;">Modifiers: ${names || 'none'}</span>`;
       }
     }
@@ -987,9 +1004,11 @@
         if (a === 'toggleFJ')  send({ type: 'adminToggleFJ' });
       });
     });
-    adminBarEl.querySelectorAll('input[data-mod]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        send({ type: 'setModifierEnabled', id: cb.dataset.mod, enabled: cb.checked });
+    adminBarEl.querySelectorAll('.mod-weight-group').forEach(group => {
+      group.querySelectorAll('.mod-weight-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          send({ type: 'setModifierWeight', id: group.dataset.mod, weight: Number(btn.dataset.weight) });
+        });
       });
     });
     }

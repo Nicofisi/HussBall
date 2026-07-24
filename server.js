@@ -78,9 +78,15 @@ let gameState = null;
 let tickSeq = 0;           // monotonic tick counter, sent with each gameState
 let roomScoreLimit = CLASSIC.scoreLimit;  // admin-overridable, reset on map change
 let roomTimeLimit = CLASSIC.timeLimit;    // admin-overridable, reset on map change
-// Which modifier ids the admin has enabled for the current map — the modifier
-// loop only ever picks from this set. Reset to "all available" on map change.
-let roomEnabledModifiers = new Set(CLASSIC.modifiers || []);
+// Relative pick weight per modifier id for the current map — the modifier
+// loop draws from these (weight 0 = never picked), not a plain on/off toggle,
+// so the admin can make some modifiers rarer/commoner instead of just
+// enabled/disabled. Reset to "3 for everything available" on map change.
+const DEFAULT_MODIFIER_WEIGHT = 3;
+function defaultModifierWeights(map) {
+  return Object.fromEntries((map.modifiers || []).map(id => [id, DEFAULT_MODIFIER_WEIGHT]));
+}
+let roomModifierWeights = defaultModifierWeights(CLASSIC);
 
 // Measures the actual setInterval firing rate (Hz) — if the Node event loop
 // falls behind (GC pauses, CPU contention), this drops below TICK_RATE and
@@ -129,7 +135,7 @@ function broadcastLobby() {
       const m = MODIFIERS_BY_ID[id];
       return { id, name: m.name, desc: m.desc, icon: m.icon };
     }),
-    enabledModifiers: [...roomEnabledModifiers],
+    modifierWeights: { ...roomModifierWeights },
   };
   broadcast(msg);
 }
@@ -416,12 +422,29 @@ function resetPositionsAfterGoal() {
 }
 
 // ============================================================
-// Modifier system — picks a random enabled modifier from shared/modifiers.js,
+// Modifier system — weighted-random-picks a modifier from shared/modifiers.js,
 // runs it for MOD_DURATION_TICKS, then pauses MOD_PAUSE_TICKS before the next.
 // ============================================================
+// Weighted random pick over the map's modifier pool. Higher roomModifierWeights
+// entries come up more often; weight 0 (or missing) means "never picked" —
+// returns null only when every eligible modifier is at weight 0.
+function pickWeightedModifier(map) {
+  const entries = (map.modifiers || [])
+    .map(id => ({ weight: roomModifierWeights[id] ?? 0, mod: MODIFIERS_BY_ID[id] }))
+    .filter(e => e.mod && e.weight > 0);
+  const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+  if (totalWeight <= 0) return null;
+  let r = Math.random() * totalWeight;
+  for (const e of entries) {
+    r -= e.weight;
+    if (r < 0) return e.mod;
+  }
+  return entries[entries.length - 1].mod; // floating-point rounding fallback
+}
+
 // Ends whatever modifier is active (if any) and immediately activates a new
-// random one from the enabled pool, skipping the pause — shared by the
-// natural end-of-pause transition and the admin "skip to next modifier" cheat.
+// weighted-random pick, skipping the pause — shared by the natural
+// end-of-pause transition and the admin "skip to next modifier" cheat.
 function endActiveAndStartNext(state, map) {
   const m = state.modifier;
   if (!m) return;
@@ -430,18 +453,14 @@ function endActiveAndStartNext(state, map) {
     m.active = null;
     rebuildGeometry();
   }
-  const pool = (map.modifiers || [])
-    .filter(id => roomEnabledModifiers.has(id))
-    .map(id => MODIFIERS_BY_ID[id])
-    .filter(Boolean);
-  if (pool.length) {
-    const chosen = pool[Math.floor(Math.random() * pool.length)];
+  const chosen = pickWeightedModifier(map);
+  if (chosen) {
     m.active = chosen;
     if (chosen.activate) chosen.activate(state, map);
     rebuildGeometry();
     m.timer = MOD_DURATION_TICKS;
   } else {
-    m.timer = MOD_PAUSE_TICKS; // nothing enabled — stay idle, check again later
+    m.timer = MOD_PAUSE_TICKS; // every weight is 0 — stay idle, check again later
   }
 }
 
@@ -922,7 +941,7 @@ function handleChangeMap(playerId, data) {
   // Reset overrides to new map's defaults
   roomScoreLimit = currentMap.scoreLimit;
   roomTimeLimit = currentMap.timeLimit;
-  roomEnabledModifiers = new Set(currentMap.modifiers || []);
+  roomModifierWeights = defaultModifierWeights(currentMap);
   if (roomPhase === 'playing' || roomPhase === 'paused') {
     roomPhase = 'lobby';
     gameState = null;
@@ -949,12 +968,13 @@ function handleChangeTimeLimit(playerId, data) {
   broadcastLobby();
 }
 
-function handleSetModifierEnabled(playerId, data) {
+function handleSetModifierWeight(playerId, data) {
   if (!isAdmin(playerId)) return;
   const id = data.id;
   if (!MODIFIERS_BY_ID[id] || !(currentMap.modifiers || []).includes(id)) return;
-  if (data.enabled) roomEnabledModifiers.add(id);
-  else roomEnabledModifiers.delete(id);
+  const weight = Number(data.weight);
+  if (!Number.isFinite(weight)) return;
+  roomModifierWeights[id] = Math.max(0, Math.min(99, Math.round(weight)));
   broadcastLobby();
 }
 
@@ -1081,7 +1101,7 @@ wss.on('connection', (ws) => {
       case 'changeMap':      if (playerId) handleChangeMap(playerId, data); break;
       case 'changeScoreLimit': if (playerId) handleChangeScoreLimit(playerId, data); break;
       case 'changeTimeLimit':  if (playerId) handleChangeTimeLimit(playerId, data); break;
-      case 'setModifierEnabled': if (playerId) handleSetModifierEnabled(playerId, data); break;
+      case 'setModifierWeight': if (playerId) handleSetModifierWeight(playerId, data); break;
     }
   });
 
