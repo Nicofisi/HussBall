@@ -229,6 +229,8 @@ function checkGoals(ball, goals) {
 // ============================================================
 function stepPhysics(state, map) {
   const gravity = map.gravity || { x: 0, y: 0 };
+  // Collected fresh each call: ball-vs-player-disc contacts, for goal/assist attribution.
+  state.ballHits = [];
 
   // 1. Apply gravity & damping once per tick (before substeps)
   for (const ball of state.balls) {
@@ -274,9 +276,15 @@ function stepPhysics(state, map) {
     }
 
     // Disc-disc collisions
+    const numBalls = state.balls.length;
+    const discsEnd = numBalls + state.discs.length;
     for (let i = 0; i < allDiscs.length; i++) {
       for (let j = i + 1; j < allDiscs.length; j++) {
-        collideDiscDisc(allDiscs[i], allDiscs[j]);
+        const hit = collideDiscDisc(allDiscs[i], allDiscs[j]);
+        // Ball-vs-player-disc contact (i is a ball, j is a player disc): record for attribution.
+        if (hit && i < numBalls && j >= numBalls && j < discsEnd) {
+          state.ballHits.push({ ball: allDiscs[i], disc: allDiscs[j] });
+        }
       }
     }
   }

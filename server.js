@@ -72,6 +72,13 @@ let tickSeq = 0;           // monotonic tick counter, sent with each gameState
 let roomScoreLimit = CLASSIC.scoreLimit;  // admin-overridable, reset on map change
 let roomTimeLimit = CLASSIC.timeLimit;    // admin-overridable, reset on map change
 
+// Measures the actual setInterval firing rate (Hz) — if the Node event loop
+// falls behind (GC pauses, CPU contention), this drops below TICK_RATE and
+// movement/physics slow down in real time even though velocities are unchanged.
+let measuredTickRate = TICK_RATE;
+let tickRateWindowStart = Date.now();
+let tickRateWindowCount = 0;
+
 // ============================================================
 // Lobby helpers
 // ============================================================
@@ -83,6 +90,9 @@ function getPlayerList() {
       name: p.name,
       team: p.team, // 'red' | 'blue' | 'spec' (spectator/unassigned)
       isAdmin: p.id === adminId,
+      goals: p.goals || 0,
+      assists: p.assists || 0,
+      ownGoals: p.ownGoals || 0,
     });
   }
   return list;
@@ -103,6 +113,10 @@ function broadcastLobby() {
   broadcast(msg);
 }
 
+function broadcastChatSystem(text) {
+  broadcast({ type: 'chat', system: true, text });
+}
+
 function assignAdmin() {
   // If no admin, assign first player
   if (adminId && players.has(adminId)) return;
@@ -121,10 +135,15 @@ function randomizeTeams() {
     const j = Math.floor(Math.random() * (i + 1));
     [ids[i], ids[j]] = [ids[j], ids[i]];
   }
-  // Split evenly
+  // Split evenly, coin-flipping which team gets the "first" slot each time —
+  // otherwise index 0 always lands on red, so a lone player (or anyone who
+  // happens to shuffle into slot 0) never actually had a chance at blue.
+  const evenSlotIsRed = Math.random() < 0.5;
   ids.forEach((id, idx) => {
     const p = players.get(id);
-    if (p) p.team = idx % 2 === 0 ? 'red' : 'blue';
+    if (!p) return;
+    const evenSlot = idx % 2 === 0;
+    p.team = (evenSlot === evenSlotIsRed) ? 'red' : 'blue';
   });
 }
 
@@ -133,6 +152,7 @@ function randomizeTeams() {
 // ============================================================
 function resetGame() {
   const map = currentMap;
+  for (const p of players.values()) { p.goals = 0; p.assists = 0; p.ownGoals = 0; }
   const ball = physics.createDisc({
     x: map.ball.x,
     y: map.ball.y,
@@ -167,6 +187,7 @@ function resetGame() {
     timer: roomTimeLimit > 0 ? roomTimeLimit * TICK_RATE : 0,
     goalTimer: 0,
     lastScorer: null,
+    goalInfo: null,
     // Chaos event system (only if map defines chaosEvents)
     chaos: map.chaosEvents ? {
       active: null,
@@ -217,6 +238,7 @@ function repositionPlayers() {
           cGroup: p.team === 'red' ? C.RED : C.BLUE,
           cMask: (p.team === 'red' ? map.player.redCMask : map.player.blueCMask) || map.player.cMask,
         });
+        disc.ownerId = p.id;
         p.disc = disc;
         gameState.discs.push(disc);
       });
@@ -238,6 +260,7 @@ function repositionPlayers() {
           cGroup: p.team === 'red' ? C.RED : C.BLUE,
           cMask: (p.team === 'red' ? map.player.redCMask : map.player.blueCMask) || map.player.cMask,
         });
+        disc.ownerId = p.id;
         p.disc = disc;
         gameState.discs.push(disc);
       });
@@ -246,6 +269,59 @@ function repositionPlayers() {
 
   placeTeam(redPlayers, -1);
   placeTeam(bluePlayers, 1);
+}
+
+// ---- Single-player spawn/remove (used mid-game so joins/leaves/team-swaps
+// don't reposition anyone else — only resetGame()/resetPositionsAfterGoal()
+// and an explicit admin randomize are allowed to reposition everybody) ----
+function spawnDiscForPlayer(p) {
+  const map = currentMap;
+  const cfg = map.player;
+  const teammates = [...players.values()].filter(pl => pl.team === p.team && pl.disc);
+  const side = p.team === 'red' ? -1 : 1;
+  const horizontal = map.spawnLayout === 'horizontal';
+  const baseY = map.spawnY ?? 0;
+  let x, y;
+
+  if (horizontal) {
+    const halfW = (map.width / 2) * 0.6;
+    const spacing = Math.min(50, halfW * 2 / Math.max(teammates.length + 1, 1));
+    x = side * map.spawnDistance + (Math.random() - 0.5) * spacing;
+    y = baseY;
+  } else {
+    const spacing = Math.min(50, (map.height - 60) / Math.max(teammates.length + 1, 1));
+    x = side * map.spawnDistance;
+    y = baseY + (Math.random() - 0.5) * spacing * (teammates.length + 1);
+  }
+
+  const disc = physics.createDisc({
+    x, y,
+    radius: cfg.radius,
+    mass: cfg.mass,
+    damping: cfg.damping,
+    bounce: 0.5,
+    color: p.team === 'red' ? '#e74c3c' : '#3498db',
+    cGroup: p.team === 'red' ? C.RED : C.BLUE,
+    cMask: (p.team === 'red' ? cfg.redCMask : cfg.blueCMask) || cfg.cMask,
+  });
+  disc.ownerId = p.id;
+  p.disc = disc;
+  gameState.discs.push(disc);
+}
+
+function removeDiscForPlayer(p) {
+  if (!p.disc || !gameState) return;
+  const idx = gameState.discs.indexOf(p.disc);
+  if (idx !== -1) gameState.discs.splice(idx, 1);
+  p.disc = null;
+}
+
+// Handles a team change (or leaving to spec) for one player mid-game, without
+// touching any other player's disc/position.
+function assignPlayerToTeamLive(p, newTeam) {
+  removeDiscForPlayer(p);
+  p.team = newTeam;
+  if (newTeam === 'red' || newTeam === 'blue') spawnDiscForPlayer(p);
 }
 
 function resetPositionsAfterGoal() {
@@ -257,6 +333,8 @@ function resetPositionsAfterGoal() {
   ball.y = map.ball.y;
   ball.vx = 0;
   ball.vy = 0;
+  ball.touches = [];
+  gameState.goalInfo = null;
   repositionPlayers();
   for (const p of players.values()) {
     if (p.disc) { p.disc.vx = 0; p.disc.vy = 0; }
@@ -282,6 +360,82 @@ function applyChaosEffects(state, map) {
   } else {
     for (const disc of state.discs) if (!disc.isStatic) disc.bounce = 0.5;
   }
+}
+
+// ============================================================
+// Goal / assist attribution
+// ============================================================
+const ASSIST_WINDOW_MS = 8000; // how far back a prior touch can still count as an assist
+const TOUCH_DEDUPE_MS = 250;   // ignore repeat passive-touch spam from the same player/tick
+
+function recordTouch(ball, player, kind) {
+  if (!ball.touches) ball.touches = [];
+  const touches = ball.touches;
+  const last = touches[touches.length - 1];
+  const now = Date.now();
+  if (last && last.playerId === player.id && last.kind === kind && (now - last.time) < TOUCH_DEDUPE_MS) return;
+  touches.push({ playerId: player.id, name: player.name, team: player.team, kind, time: now });
+  if (touches.length > 8) touches.shift();
+}
+
+// Who gets credit for a goal, based on the scoring ball's touch history.
+// Walking/dribbling the ball in via plain body contact counts as a real goal,
+// same as an active kick. Own goal only applies when the scoring team never
+// touched the ball at all — otherwise we anchor on the scoring team's own
+// last touch: if it was a passive deflection off a teammate's more recent
+// shot, the shooter keeps the goal and the deflector gets a real assist; if
+// an opponent's touch happens to land AFTER the scoring team's decisive
+// touch (didn't change the outcome), it's a funny footnote, never a real
+// stat or an own goal.
+function attributeGoal(ball, scoringTeam) {
+  const touches = ball.touches || [];
+  if (touches.length === 0) {
+    return { scorer: null, ownGoal: null, assist: null, funnyAssist: null };
+  }
+
+  let finalIdx = -1;
+  for (let i = touches.length - 1; i >= 0; i--) {
+    if (touches[i].team === scoringTeam) { finalIdx = i; break; }
+  }
+
+  if (finalIdx === -1) {
+    // The scoring team never touched this ball — entirely the conceding
+    // team's doing, credited to whoever touched it last.
+    return { scorer: null, ownGoal: touches[touches.length - 1], assist: null, funnyAssist: null };
+  }
+
+  const scoringTouch = touches[finalIdx];
+  let scorer = scoringTouch;
+  let deflector = null;
+  let funnyAssist = finalIdx < touches.length - 1 ? touches[touches.length - 1] : null;
+
+  if (scoringTouch.kind === 'touch') {
+    // See if this passive touch deflected a more recent teammate's shot.
+    for (let i = finalIdx - 1; i >= 0; i--) {
+      const t = touches[i];
+      if (t.kind === 'kick') {
+        if (t.team === scoringTeam && t.playerId !== scoringTouch.playerId) {
+          scorer = t;
+          deflector = scoringTouch;
+        }
+        break;
+      }
+    }
+  }
+
+  let assist = deflector;
+  if (!assist) {
+    for (let i = touches.indexOf(scorer) - 1; i >= 0; i--) {
+      const t = touches[i];
+      if (t.team !== scoringTeam) break; // possession chain broken by an opponent touch
+      if (t.playerId !== scorer.playerId && (scorer.time - t.time) < ASSIST_WINDOW_MS) {
+        assist = t;
+        break;
+      }
+    }
+  }
+
+  return { scorer, ownGoal: null, assist, funnyAssist };
 }
 
 // ============================================================
@@ -367,6 +521,7 @@ function gameTick() {
         if (physics.tryKick(p.disc, ball, playerCfg)) {
           p.lastKickTime = now;
           gameState.kicked = true;
+          recordTouch(ball, p, 'kick');
         }
       }
     }
@@ -374,18 +529,42 @@ function gameTick() {
 
   physics.stepPhysics(gameState, map);
 
+  // Passive ball-vs-player contacts detected during physics resolution — feed
+  // them into the same touch history used for goal/assist attribution.
+  for (const hit of gameState.ballHits) {
+    const owner = hit.disc.ownerId != null ? players.get(hit.disc.ownerId) : null;
+    if (owner) recordTouch(hit.ball, owner, 'touch');
+  }
+
   // Only check goals during normal play (not during goal celebration)
   if (gameState.phase === 'playing') {
     let scorer = null;
+    let scoringBall = null;
     for (const ball of gameState.balls) {
       scorer = physics.checkGoals(ball, map.goals);
-      if (scorer) break;
+      if (scorer) { scoringBall = ball; break; }
     }
     if (scorer) {
       gameState.score[scorer]++;
       gameState.phase = 'goal';
       gameState.goalTimer = TICK_RATE * 2;
       gameState.lastScorer = scorer;
+
+      const credit = attributeGoal(scoringBall, scorer);
+      gameState.goalInfo = credit;
+      scoringBall.touches = [];
+
+      if (credit.scorer) {
+        const p = players.get(credit.scorer.playerId);
+        if (p) p.goals++;
+      } else if (credit.ownGoal) {
+        const p = players.get(credit.ownGoal.playerId);
+        if (p) p.ownGoals++;
+      }
+      if (credit.assist) {
+        const p = players.get(credit.assist.playerId);
+        if (p) p.assists++;
+      }
     }
   }
 
@@ -444,6 +623,8 @@ function sendGameState() {
     timer: gameState.timer,
     kicked: gameState.kicked || false,
     lastScorer: gameState.lastScorer,
+    goalInfo: gameState.goalInfo || null,
+    tickRate: Math.round(measuredTickRate * 10) / 10,
     map: currentMap.name,
     mapInfo: {
       w: currentMap.width,
@@ -475,6 +656,9 @@ function handleJoin(ws, data) {
     disc: null,
     input: { up: false, down: false, left: false, right: false, kick: false },
     lastKickTime: 0,
+    goals: 0,
+    assists: 0,
+    ownGoals: 0,
   };
   players.set(id, player);
 
@@ -490,13 +674,11 @@ function handleJoin(ws, data) {
   }));
 
   console.log(`[+] ${name} joined (${players.size} players)${id === adminId ? ' [ADMIN]' : ''}`);
+  broadcastChatSystem(`${name} joined`);
 
-  // If we're in lobby, broadcast lobby state
-  // If game is in progress, put them in spec and broadcast
+  // New players always start as spectators — joining the lobby never
+  // touches gameplay, so no repositioning happens here.
   broadcastLobby();
-  if (roomPhase === 'playing') {
-    repositionPlayers();
-  }
 
   return id;
 }
@@ -507,10 +689,11 @@ function handleSelfTeam(playerId, data) {
   if (!freeJoin && !isAdmin(playerId)) return; // locked
   const team = data.team;
   if (team !== 'red' && team !== 'blue' && team !== 'spec') return;
-  player.team = team;
 
-  if (roomPhase === 'playing') {
-    repositionPlayers();
+  if (roomPhase === 'playing' && gameState) {
+    assignPlayerToTeamLive(player, team);
+  } else {
+    player.team = team;
   }
   broadcastLobby();
 }
@@ -521,10 +704,11 @@ function handleAdminMovePlayer(playerId, data) {
   if (!target) return;
   const team = data.team;
   if (team !== 'red' && team !== 'blue' && team !== 'spec') return;
-  target.team = team;
 
-  if (roomPhase === 'playing') {
-    repositionPlayers();
+  if (roomPhase === 'playing' && gameState) {
+    assignPlayerToTeamLive(target, team);
+  } else {
+    target.team = team;
   }
   broadcastLobby();
 }
@@ -532,6 +716,12 @@ function handleAdminMovePlayer(playerId, data) {
 function handleAdminRandomize(playerId) {
   if (!isAdmin(playerId)) return;
   randomizeTeams();
+  // Randomize reassigns everyone's team at once — repositioning the whole
+  // field here is the intended, admin-initiated exception to the
+  // "don't teleport everyone" rule.
+  if (roomPhase === 'playing' && gameState) {
+    repositionPlayers();
+  }
   broadcastLobby();
 }
 
@@ -652,6 +842,25 @@ function handleInput(playerId, data) {
   };
 }
 
+const CHAT_COOLDOWN_MS = 300;
+
+function handleChat(playerId, data) {
+  const player = players.get(playerId);
+  if (!player) return;
+  const text = String(data.text || '').trim().substring(0, 200);
+  if (!text) return;
+  const now = Date.now();
+  if (player.lastChatTime && (now - player.lastChatTime) < CHAT_COOLDOWN_MS) return;
+  player.lastChatTime = now;
+  broadcast({
+    type: 'chat',
+    id: player.id,
+    name: player.name,
+    team: player.team,
+    text,
+  });
+}
+
 function handleCheat(playerId, data) {
   if (!isAdmin(playerId)) return;
   if (roomPhase !== 'playing' || !gameState) return;
@@ -703,6 +912,7 @@ wss.on('connection', (ws) => {
       case 'join':           playerId = handleJoin(ws, data); break;
       case 'ping':           ws.send(JSON.stringify({ type: 'pong', t: data.t })); break;
       case 'input':          handleInput(playerId, data); break;
+      case 'chat':           if (playerId) handleChat(playerId, data); break;
       case 'cheat':          if (playerId) handleCheat(playerId, data); break;
       case 'selfTeam':       if (playerId) handleSelfTeam(playerId, data); break;
       case 'adminMove':      if (playerId) handleAdminMovePlayer(playerId, data); break;
@@ -736,11 +946,12 @@ wss.on('connection', (ws) => {
         }
       }
 
-      if (roomPhase === 'playing' && gameState) {
-        repositionPlayers();
+      if (player && roomPhase === 'playing' && gameState) {
+        removeDiscForPlayer(player);
       }
 
       broadcastLobby();
+      broadcastChatSystem(`${name} left`);
       console.log(`[-] ${name} left (${players.size} players)`);
     }
   });
@@ -749,11 +960,68 @@ wss.on('connection', (ws) => {
 // ============================================================
 // Start
 // ============================================================
-setInterval(() => {
+// ---- Perf instrumentation: find out where tick time actually goes ----
+let perfTickSum = 0, perfTickMax = 0;
+let perfSendSum = 0, perfSendMax = 0;
+const SLOW_TICK_MS = 30; // log immediately if a single iteration blows past this
+
+function runTick() {
+  const t0 = process.hrtime.bigint();
   gameTick();
-  tickSeq++;
+  const t1 = process.hrtime.bigint();
   sendGameState();
-}, TICK_MS);
+  const t2 = process.hrtime.bigint();
+
+  const tickMs = Number(t1 - t0) / 1e6;
+  const sendMs = Number(t2 - t1) / 1e6;
+  perfTickSum += tickMs; if (tickMs > perfTickMax) perfTickMax = tickMs;
+  perfSendSum += sendMs; if (sendMs > perfSendMax) perfSendMax = sendMs;
+  if (tickMs + sendMs > SLOW_TICK_MS) {
+    console.log(`[perf] SLOW TICK: total=${(tickMs + sendMs).toFixed(1)}ms gameTick=${tickMs.toFixed(1)}ms sendGameState=${sendMs.toFixed(1)}ms`);
+  }
+
+  tickSeq++;
+  tickRateWindowCount++;
+  const now = Date.now();
+  const windowElapsed = now - tickRateWindowStart;
+  if (windowElapsed >= 1000) {
+    measuredTickRate = tickRateWindowCount * 1000 / windowElapsed;
+    console.log(
+      `[perf] ${measuredTickRate.toFixed(1)} ticks/s | gameTick avg=${(perfTickSum / tickRateWindowCount).toFixed(2)}ms max=${perfTickMax.toFixed(2)}ms | ` +
+      `sendGameState avg=${(perfSendSum / tickRateWindowCount).toFixed(2)}ms max=${perfSendMax.toFixed(2)}ms | players=${players.size}`
+    );
+    tickRateWindowCount = 0;
+    tickRateWindowStart = now;
+    perfTickSum = 0; perfTickMax = 0;
+    perfSendSum = 0; perfSendMax = 0;
+  }
+}
+
+// Self-correcting tick loop. `setInterval`/`setTimeout` are bound to the OS's
+// timer resolution (Windows defaults to ~15.6ms ticks, which doesn't divide
+// evenly into our 16.67ms budget and can silently halve the real rate).
+// `setImmediate` isn't subject to that floor — it fires as soon as the event
+// loop is free — so we poll with it and only do real work once enough time
+// has actually elapsed, per process.hrtime(). Bounded catch-up avoids a
+// death-spiral if something genuinely stalls the loop.
+const TICK_NS = BigInt(Math.round(TICK_MS * 1e6));
+let nextTickTime = process.hrtime.bigint();
+
+function tickLoop() {
+  const now = process.hrtime.bigint();
+  let ranTicks = 0;
+  while (now >= nextTickTime && ranTicks < 5) {
+    runTick();
+    nextTickTime += TICK_NS;
+    ranTicks++;
+  }
+  if (ranTicks >= 5) {
+    // Fell too far behind to catch up — resync instead of spiraling.
+    nextTickTime = now + TICK_NS;
+  }
+  setImmediate(tickLoop);
+}
+setImmediate(tickLoop);
 
 httpServer.listen(PORT, () => {
   console.log(`HussBall server running on http://localhost:${PORT}`);

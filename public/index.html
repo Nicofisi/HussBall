@@ -130,7 +130,7 @@
     flex: 1;
     min-height: 0;
     width: 100%;
-    max-width: 800px;
+    max-width: 1100px;
     padding: 0 20px;
   }
   .team-col {
@@ -140,7 +140,6 @@
     overflow: hidden;
     max-height: 60vh;
   }
-  .team-col.spec-col { max-width: 180px; }
 
   .team-header {
     padding: 10px 0;
@@ -173,15 +172,22 @@
     font-size: 10px; padding: 2px 6px;
     border-radius: 3px; font-weight: bold;
   }
+  .player-row .stats { font-size: 11px; color: #9ad6a3; white-space: nowrap; }
   .player-row .badge.admin { background: #f39c12; color: #000; }
   .player-row .badge.you { background: #e94560; color: #fff; }
-  .player-row .actions { display: flex; gap: 4px; }
+  .player-row .actions { display: flex; gap: 4px; flex-shrink: 0; }
   .player-row .actions button {
-    font-size: 11px; padding: 2px 8px;
-    border: 1px solid #555; border-radius: 3px;
+    width: 22px; height: 22px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; line-height: 1;
+    border: 1px solid #555; border-radius: 4px;
     background: #222; color: #aaa; cursor: pointer;
   }
-  .player-row .actions button:hover { background: #444; color: #fff; }
+  .player-row .actions button:hover { background: #444; }
+  .player-row .actions button.to-red  { color: #e74c3c; }
+  .player-row .actions button.to-blue { color: #3498db; }
+  .player-row .actions button.to-spec { color: #999; }
+  .player-row .actions button[data-transfer] { color: #f39c12; font-size: 12px; }
 
   .join-btn {
     margin: 6px; padding: 8px;
@@ -208,6 +214,61 @@
   }
   .sound-toggle:hover { background: #0f3460; }
   .sound-toggle.off { color: #666; }
+
+  /* ---- Chat ---- */
+  #chat-container {
+    position: fixed; left: 12px; bottom: 12px;
+    z-index: 60;
+    width: 340px;
+    max-width: 42vw;
+    display: flex; flex-direction: column;
+    pointer-events: none;
+  }
+  #chat-log {
+    display: flex; flex-direction: column;
+    gap: 2px;
+    max-height: 220px;
+    overflow: hidden;
+  }
+  #chat-container.open #chat-log {
+    overflow-y: auto;
+    max-height: 40vh;
+    background: rgba(10,10,20,0.55);
+    border-radius: 6px;
+    padding: 6px;
+  }
+  .chat-msg {
+    font-size: 13px;
+    line-height: 1.4;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.6);
+    padding: 1px 6px;
+    border-radius: 3px;
+    opacity: 1;
+    transition: opacity 0.5s ease;
+    word-break: break-word;
+  }
+  #chat-container.open .chat-msg { text-shadow: none; }
+  .chat-msg.fade-out { opacity: 0; }
+  .chat-msg .who { font-weight: bold; }
+  .chat-msg .who.red { color: #ff8478; }
+  .chat-msg .who.blue { color: #7ab8f5; }
+  .chat-msg .who.spec { color: #bbb; }
+  .chat-msg.system { color: #f4d35e; font-style: italic; }
+  #chat-input-box {
+    display: none;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: rgba(10,10,20,0.85);
+    color: #fff;
+    font-size: 14px;
+    outline: none;
+    pointer-events: auto;
+  }
+  #chat-container.open #chat-input-box { display: block; }
+  #chat-container.open #chat-input-box:focus { border-color: #e94560; }
 
   /* Connection toast */
   #conn-toast {
@@ -265,6 +326,11 @@
 </div>
 
 <div id="conn-toast">Disconnected - reconnecting...</div>
+
+<div id="chat-container">
+  <div id="chat-log"></div>
+  <input type="text" id="chat-input-box" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Wiadomość...">
+</div>
 
 <script>
 (() => {
@@ -353,6 +419,9 @@
   const lobbyStatus = document.getElementById('lobby-status');
   const soundToggle = document.getElementById('sound-toggle');
   const connToast   = document.getElementById('conn-toast');
+  const chatContainer = document.getElementById('chat-container');
+  const chatLogEl      = document.getElementById('chat-log');
+  const chatInputEl    = document.getElementById('chat-input-box');
 
   // ---- State ----
   let ws = null;
@@ -367,6 +436,79 @@
   let endedLobbyTimer = null;
   let pingMs = 0;
   let pingInterval = null;
+
+  // ---- Chat ----
+  let chatOpen = false;
+  const CHAT_FADE_MS = 5000;
+  const CHAT_MAX_MESSAGES = 100;
+
+  function appendChatMessage(msg) {
+    const div = document.createElement('div');
+    div.className = 'chat-msg' + (msg.system ? ' system' : '');
+    div.dataset.fadeAt = String(Date.now());
+
+    if (msg.system) {
+      div.textContent = msg.text;
+    } else {
+      const who = document.createElement('span');
+      who.className = 'who ' + (msg.team || 'spec');
+      who.textContent = msg.name + ': ';
+      div.appendChild(who);
+      div.appendChild(document.createTextNode(msg.text));
+    }
+
+    chatLogEl.appendChild(div);
+    while (chatLogEl.children.length > CHAT_MAX_MESSAGES) {
+      chatLogEl.removeChild(chatLogEl.firstChild);
+    }
+    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  }
+
+  // Periodically fade out old messages when chat is closed.
+  setInterval(() => {
+    if (chatOpen) return;
+    const now = Date.now();
+    for (const el of [...chatLogEl.children]) {
+      const fadeAt = +el.dataset.fadeAt;
+      if (now - fadeAt > CHAT_FADE_MS && !el.classList.contains('fade-out')) {
+        el.classList.add('fade-out');
+      }
+    }
+  }, 250);
+
+  function openChat() {
+    chatOpen = true;
+    chatContainer.classList.add('open');
+    // Give every currently-visible message a fresh countdown for after we close.
+    for (const el of chatLogEl.children) {
+      el.classList.remove('fade-out');
+      el.dataset.fadeAt = String(Date.now());
+    }
+    chatInputEl.value = '';
+    chatInputEl.focus();
+    chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  }
+
+  function closeChat() {
+    chatOpen = false;
+    chatContainer.classList.remove('open');
+    chatInputEl.blur();
+    for (const el of chatLogEl.children) {
+      el.dataset.fadeAt = String(Date.now());
+    }
+  }
+
+  function sendChatMessage() {
+    const text = chatInputEl.value.trim();
+    if (text) send({ type: 'chat', text });
+    closeChat();
+  }
+
+  chatInputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); sendChatMessage(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeChat(); }
+    e.stopPropagation();
+  });
 
   // Velocity extrapolation with smooth correction
   const TICK_MS = 1000 / 60;
@@ -451,6 +593,10 @@
       case 'lobby':
         lobbyData = msg;
         renderLobby();
+        break;
+
+      case 'chat':
+        appendChatMessage(msg);
         break;
 
       case 'gameState': {
@@ -560,10 +706,22 @@
     }
   }
 
-  // ---- ESC toggle ----
+  // ---- ESC toggle / chat / game input ----
   window.addEventListener('keydown', e => {
     // Don't capture game keys when typing in input fields
     const isTyping = document.activeElement && document.activeElement.tagName === 'INPUT';
+
+    if (e.key === 'Enter' && !isTyping && hasJoined && connected) {
+      e.preventDefault();
+      openChat();
+      return;
+    }
+
+    if (e.key === 'Escape' && chatOpen) {
+      e.preventDefault();
+      closeChat();
+      return;
+    }
 
     if (e.key === 'Escape' && hasJoined && connected) {
       e.preventDefault();
@@ -761,16 +919,26 @@
     let actions = '';
     const canMove = iAmAdmin || (isMe && lobbyData && lobbyData.freeJoin);
     if (canMove) {
-      if (p.team !== 'red')  actions += `<button data-pid="${p.id}" data-move="red">Red</button>`;
-      if (p.team !== 'blue') actions += `<button data-pid="${p.id}" data-move="blue">Blue</button>`;
-      if (p.team !== 'spec') actions += `<button data-pid="${p.id}" data-move="spec">Spec</button>`;
+      if (p.team !== 'red')  actions += `<button class="to-red" data-pid="${p.id}" data-move="red" title="Move to Red">●</button>`;
+      if (p.team !== 'blue') actions += `<button class="to-blue" data-pid="${p.id}" data-move="blue" title="Move to Blue">●</button>`;
+      if (p.team !== 'spec') actions += `<button class="to-spec" data-pid="${p.id}" data-move="spec" title="Move to Spectators">●</button>`;
     }
     if (iAmAdmin && !isMe && !p.isAdmin) {
-      actions += `<button data-transfer="${p.id}">★</button>`;
+      actions += `<button data-transfer="${p.id}" title="Make admin">★</button>`;
+    }
+
+    let stats = '';
+    if (p.goals || p.assists || p.ownGoals) {
+      const parts = [];
+      if (p.goals) parts.push(`⚽${p.goals}`);
+      if (p.assists) parts.push(`🅰${p.assists}`);
+      if (p.ownGoals) parts.push(`OG${p.ownGoals}`);
+      stats = `<span class="stats">${parts.join(' ')}</span>`;
     }
 
     return `<div class="player-row">
       <span class="name">${escHTML(p.name)}</span>
+      ${stats}
       ${badges}
       <span class="actions">${actions}</span>
     </div>`;
@@ -795,6 +963,26 @@
 
   // ---- Extrapolation helper ----
   function lerp(a, b, t) { return a + (b - a) * t; }
+
+  // ---- Goal credit text ----
+  function goalHeadline(credit, lastScorer) {
+    if (credit && credit.scorer) return `${credit.scorer.name.toUpperCase()} SCORES!`;
+    if (credit && credit.ownGoal) return `OWN GOAL! (${credit.ownGoal.name})`;
+    return `GOAL! ${lastScorer.toUpperCase()} scores!`;
+  }
+
+  function goalOverlayLines(credit, lastScorer) {
+    if (credit && credit.scorer) {
+      const sub = [];
+      if (credit.assist) sub.push(`Assist: ${credit.assist.name}`);
+      if (credit.funnyAssist) sub.push(`🤡 unwittingly assisted by ${credit.funnyAssist.name}`);
+      return { main: `${credit.scorer.name.toUpperCase()} SCORES!`, sub };
+    }
+    if (credit && credit.ownGoal) {
+      return { main: 'OWN GOAL!', sub: [`(${credit.ownGoal.name})`] };
+    }
+    return { main: 'GOAL!', sub: [] };
+  }
 
   function getExtrapState() {
     if (!latestState) return null;
@@ -842,7 +1030,7 @@
     return {
       balls, players,
       score: state.score, phase: state.phase, timer: state.timer,
-      lastScorer: state.lastScorer, map: state.map, mapInfo: state.mapInfo,
+      lastScorer: state.lastScorer, goalInfo: state.goalInfo, map: state.map, mapInfo: state.mapInfo,
       chaos: state.chaos,
     };
   }
@@ -863,7 +1051,16 @@
   resizeCanvas();
 
   // ---- Render loop ----
+  let fps = 0;
+  let lastFrameTime = performance.now();
   function renderLoop() {
+    const now = performance.now();
+    const dt = now - lastFrameTime;
+    lastFrameTime = now;
+    if (dt > 0) {
+      const instFps = 1000 / dt;
+      fps = fps ? fps * 0.9 + instFps * 0.1 : instFps;
+    }
     render();
     requestAnimationFrame(renderLoop);
   }
@@ -894,7 +1091,7 @@
     }
 
     if (state.phase === 'goal')
-      phaseLabel.textContent = `GOAL! ${state.lastScorer.toUpperCase()} scores!`;
+      phaseLabel.textContent = goalHeadline(state.goalInfo, state.lastScorer);
     else if (state.phase === 'ended') {
       const w = state.score.red > state.score.blue ? 'RED' : state.score.blue > state.score.red ? 'BLUE' : 'DRAW';
       phaseLabel.textContent = `Game Over — ${w} wins!`;
@@ -1142,14 +1339,21 @@
 
     // Goal overlay
     if (state.phase === 'goal') {
-      const sc = state.lastScorer === 'red' ? '#e74c3c' : '#3498db';
+      const credit = state.goalInfo;
+      const sc = credit && credit.ownGoal ? '#e67e22' : (state.lastScorer === 'red' ? '#e74c3c' : '#3498db');
+      const lines = goalOverlayLines(credit, state.lastScorer);
       ctx.fillStyle = 'rgba(0,0,0,0.35)';
       ctx.fillRect(0, 0, W, H);
       ctx.fillStyle = sc;
-      ctx.font = 'bold 52px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('GOAL!', cx, cy - 20);
+      ctx.font = `bold ${lines.sub.length ? 44 : 52}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const mainY = lines.sub.length ? cy - 34 : cy - 20;
+      ctx.fillText(lines.main, cx, mainY);
+      ctx.font = '16px sans-serif'; ctx.fillStyle = '#f0f0f0';
+      lines.sub.forEach((s, i) => ctx.fillText(s, cx, mainY + 34 + i * 22));
+      const scoreY = mainY + 34 + lines.sub.length * 22 + 24;
       ctx.fillStyle = '#fff'; ctx.font = '26px sans-serif';
-      ctx.fillText(`${state.score.red} — ${state.score.blue}`, cx, cy + 30);
+      ctx.fillText(`${state.score.red} — ${state.score.blue}`, cx, scoreY);
     }
 
     // Ended overlay
@@ -1178,11 +1382,27 @@
       ctx.fillText('PAUSED', cx, cy);
     }
 
-    // Ping display (top-left, below HUD)
-    const pingColor = pingMs < 50 ? 'rgba(100,255,100,0.7)' : pingMs < 120 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
-    ctx.fillStyle = pingColor;
+    // Ping / FPS / server tick-rate — one compact line, top-left below HUD.
     ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText(`${pingMs}ms`, 8, 46);
+    let perfX = 8;
+    const perfY = 46;
+    function drawPerfSeg(text, color) {
+      ctx.fillStyle = color;
+      ctx.fillText(text, perfX, perfY);
+      perfX += ctx.measureText(text).width + 10;
+    }
+
+    const pingColor = pingMs < 50 ? 'rgba(100,255,100,0.7)' : pingMs < 120 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
+    drawPerfSeg(`${pingMs}ms`, pingColor);
+
+    const fpsColor = fps > 50 ? 'rgba(100,255,100,0.7)' : fps > 30 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
+    drawPerfSeg(`${Math.round(fps)}fps`, fpsColor);
+
+    if (latestState && latestState.tickRate != null) {
+      const tr = Math.round(latestState.tickRate);
+      const tickColor = tr > 55 ? 'rgba(100,255,100,0.7)' : tr > 40 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
+      drawPerfSeg(`${tr}tps`, tickColor);
+    }
   }
 
 })();
