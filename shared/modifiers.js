@@ -48,6 +48,7 @@ function spawnExtraBall(state, map) {
     cGroup: map.ball.cGroup,
     cMask: map.ball.cMask,
     gravityScale: map.ball.gravityScale ?? 0,
+    maxFallSpeed: map.ball.maxFallSpeed ?? null,
   });
   state.balls.push(ball);
 }

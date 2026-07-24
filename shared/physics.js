@@ -51,6 +51,7 @@ function createDisc(opts) {
     cGroup: opts.cGroup ?? C.ALL,
     cMask:  opts.cMask  ?? C.ALL,
     gravityScale: opts.gravityScale ?? 0, // 0 = unaffected, 1 = full gravity
+    maxFallSpeed: opts.maxFallSpeed ?? null, // null = no cap on gravity-driven fall speed (never touches kicks)
   };
 }
 
@@ -364,9 +365,15 @@ function tryKick(player, ball, playerCfg) {
 
   if (dist > kickDist || dist === 0) return false;
 
+  // kickForceY defaults to kickForce (identical to before) for any map that
+  // doesn't set it. Volleyball sets it higher: gravity constantly fights
+  // vertical motion but nothing opposes horizontal, so the same force reads
+  // as "flies across the court" sideways and "barely rises" upward — a
+  // separate, stronger vertical constant fixes that without touching
+  // horizontal kicks at all.
   const n = normalize(dx, dy);
   ball.vx += n.x * playerCfg.kickForce;
-  ball.vy += n.y * playerCfg.kickForce;
+  ball.vy += n.y * (playerCfg.kickForceY ?? playerCfg.kickForce);
 
   return true;
 }
@@ -483,7 +490,21 @@ function stepPhysics(state, map) {
   // 1. Apply gravity & damping once per tick (before substeps)
   for (const ball of state.balls) {
     ball.vx += gravity.x * ball.gravityScale;
-    ball.vy += gravity.y * ball.gravityScale;
+    const fallAccel = gravity.y * ball.gravityScale;
+    // maxFallSpeed only limits gravity's own contribution (positive vy,
+    // since +y is down here) — once gravity has built the fall up to the
+    // cap, gravity stops adding more, same idea as real-world terminal
+    // velocity, just without modeling drag. It never touches vy directly, so
+    // a kick or spike that launches the ball downward faster than the cap is
+    // completely unaffected — gravity just contributes nothing further that
+    // tick, and the kick's speed decays normally via damping like always.
+    if (ball.maxFallSpeed != null && fallAccel > 0) {
+      if (ball.vy < ball.maxFallSpeed) {
+        ball.vy = Math.min(ball.vy + fallAccel, ball.maxFallSpeed);
+      }
+    } else {
+      ball.vy += fallAccel;
+    }
     ball.vx *= ball.damping;
     ball.vy *= ball.damping;
   }

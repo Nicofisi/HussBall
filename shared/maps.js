@@ -241,24 +241,28 @@ const VOLLEYBALL = {
 
   ball: {
     x: 0, y: -100,
-    radius: 10,
+    radius: 7,
     mass: 0.5,
     damping: 0.995,
     bounce: 0.75,
     color: '#ffdd44',
     gravityScale: 2,
+    maxFallSpeed: 3.2, // a little under the player's 3.8 maxSpeed; only caps gravity, not kicks
     cGroup: C.BALL,
     // NO C.PLAYER here: ball passes through players (only kick moves it)
     cMask: C.BALL | C.WALL | C.POST | C.NET,
   },
 
   player: {
-    radius: 15,
+    // Movement feel (radius/mass/damping/acceleration/maxSpeed) borrowed
+    // straight from Chaos's player tuning to try for the same snappy feel.
+    radius: 12,
     mass: 2,
-    damping: 0.96,
-    acceleration: 0.2,
-    maxSpeed: 3.2,
+    damping: 0.90,
+    acceleration: 0.37,
+    maxSpeed: 3.8,
     kickForce: 10,
+    kickForceY: 12, // stronger than kickForce on purpose — see tryKick in physics.js
     kickRadius: 5,
     kickCooldown: 100,
     // No C.BALL: players don't physically collide with ball

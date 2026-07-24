@@ -244,6 +244,7 @@ function resetGame() {
     cGroup: map.ball.cGroup,
     cMask: map.ball.cMask,
     gravityScale: map.ball.gravityScale ?? 0,
+    maxFallSpeed: map.ball.maxFallSpeed ?? null,
   });
 
   gameState = {
@@ -1025,6 +1026,7 @@ function handleCheat(playerId, data) {
       cGroup: map.ball.cGroup,
       cMask: map.ball.cMask,
       gravityScale: map.ball.gravityScale ?? 0,
+      maxFallSpeed: map.ball.maxFallSpeed ?? null,
     });
     gameState.balls.push(ball);
     console.log(`[CHEAT] ${player.name} spawned extra ball`);
