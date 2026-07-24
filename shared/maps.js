@@ -51,6 +51,24 @@ function makeWalls(w, h, goalY, netDepth, playerBorder) {
   ];
 }
 
+// Helper: the decorative U-shaped net outline drawn behind each goal mouth
+// (purely visual — has no effect on collision). Kept as its own generator
+// (mirroring makeWalls) so modifiers that move/recolor goals (bigGoals,
+// switchSides) can regenerate a matching outline instead of leaving it stuck
+// at the map's default position/color.
+function makeGoalNetLines(hw, netDepth, goalY, redColor, blueColor) {
+  return [
+    // Left goal net (U-shape)
+    { x1: -hw, y1: -goalY, x2: -hw - netDepth, y2: -goalY, color: redColor, width: 4 },
+    { x1: -hw - netDepth, y1: -goalY, x2: -hw - netDepth, y2: goalY, color: redColor, width: 4 },
+    { x1: -hw - netDepth, y1: goalY, x2: -hw, y2: goalY, color: redColor, width: 4 },
+    // Right goal net (U-shape)
+    { x1: hw, y1: -goalY, x2: hw + netDepth, y2: -goalY, color: blueColor, width: 4 },
+    { x1: hw + netDepth, y1: -goalY, x2: hw + netDepth, y2: goalY, color: blueColor, width: 4 },
+    { x1: hw + netDepth, y1: goalY, x2: hw, y2: goalY, color: blueColor, width: 4 },
+  ];
+}
+
 // ============================================================
 // CLASSIC
 // ============================================================
@@ -305,6 +323,8 @@ const CHAOS = {
   height: 400,
   spawnDistance: 170,
   playerBorder: 50,
+  goalY: 80,      // half-height of the goal mouth — named so modifiers (bigGoals) can scale it
+  netDepth: 30,   // how far the goal net extends past the boundary — needed to regenerate walls
 
   ball: {
     x: 0, y: 0,
@@ -319,11 +339,15 @@ const CHAOS = {
   },
 
   player: {
-    radius: 15,
+    radius: 17,          // larger than Classic's 15 — easier to aim/kick with
     mass: 2,
-    damping: 0.96,
-    acceleration: 0.12,
-    maxSpeed: 3.2,
+    // Equilibrium speed = acceleration*damping/(1-damping) — this settles at
+    // ~3.33, above Classic's ~2.88 (its own equilibrium; maxSpeed 3.2 there
+    // is never actually reached), and damping lower than Classic's 0.96 gives
+    // snappier left/right reversal without that having to cost cruising speed.
+    damping: 0.90,
+    acceleration: 0.37,
+    maxSpeed: 3.8,
     kickForce: 5,
     kickRadius: 4,
     kickCooldown: 100,
@@ -350,30 +374,40 @@ const CHAOS = {
 
   bg: '#718C5A',
   gravity: { x: 0, y: 0 },
-  scoreLimit: 3,
+  scoreLimit: 5,
   timeLimit: 300,
 
-  // --- Chaos event system ---
-  chaosEvents: [
-    { id: 'bouncyWalls',  name: 'Bouncy Walls',  desc: 'Walls accelerate the ball!' },
-    { id: 'playerBounce', name: 'Bumper Players', desc: 'Players bounce off each other!' },
+  // --- Modifier system: which modifiers from shared/modifiers.js are eligible
+  // to fire on this map (admin can further narrow this at runtime) ---
+  modifiers: ['bouncyWalls', 'playerBounce', 'twoBalls', 'bigGoals', 'switchSides', 'bumpers'],
+
+  // Preset obstacle layouts for the 'bumpers' modifier — one is picked at random
+  // when it activates. Plain post specs (cGroup/cMask default to POST/BALL|PLAYER).
+  // isBumper tags them so the client can flash them on ball impact.
+  bumperLayouts: [
+    [
+      { x: -150, y: -100, radius: 34, bounce: 3.5, color: '#9b59b6', isBumper: true },
+      { x: 150,  y: 100,  radius: 34, bounce: 3.5, color: '#9b59b6', isBumper: true },
+    ],
+    [
+      { x: 0, y: -120, radius: 38, bounce: 3.5, color: '#9b59b6', isBumper: true },
+      { x: 0, y: 120,  radius: 38, bounce: 3.5, color: '#9b59b6', isBumper: true },
+    ],
+    [
+      { x: -180, y: 0, radius: 32, bounce: 3.5, color: '#9b59b6', isBumper: true },
+      { x: 180,  y: 0, radius: 32, bounce: 3.5, color: '#9b59b6', isBumper: true },
+      { x: 0,    y: 0, radius: 32, bounce: 3.5, color: '#9b59b6', isBumper: true },
+    ],
   ],
-  chaosEventDuration: 20 * 60,   // 20 s in ticks (60 Hz)
-  chaosPauseDuration: 20 * 60,   // 20 s pause between events
 
   visual: {
     lines: [
       // Center line
       { x1: 0, y1: -200, x2: 0, y2: 200, color: 'rgba(255,255,255,0.25)', width: 4 },
-      // Left goal net (U-shape)
-      { x1: -420, y1: -80, x2: -450, y2: -80, color: 'rgba(231,76,60,0.5)', width: 4 },
-      { x1: -450, y1: -80, x2: -450, y2:  80, color: 'rgba(231,76,60,0.5)', width: 4 },
-      { x1: -450, y1:  80, x2: -420, y2:  80, color: 'rgba(231,76,60,0.5)', width: 4 },
-      // Right goal net (U-shape)
-      { x1: 420, y1: -80, x2: 450, y2: -80, color: 'rgba(52,152,219,0.5)', width: 4 },
-      { x1: 450, y1: -80, x2: 450, y2:  80, color: 'rgba(52,152,219,0.5)', width: 4 },
-      { x1: 450, y1:  80, x2: 420, y2:  80, color: 'rgba(52,152,219,0.5)', width: 4 },
     ],
+    // Regenerable separately from `lines` — bigGoals/switchSides rebuild this
+    // to match their scaled/recolored goals instead of leaving it stuck here.
+    goalNetLines: makeGoalNetLines(420, 30, 80, 'rgba(231,76,60,0.5)', 'rgba(52,152,219,0.5)'),
     circles: [
       // Center circle
       { x: 0, y: 0, radius: 60, color: 'rgba(255,255,255,0.25)', width: 4 },
@@ -385,5 +419,5 @@ const CHAOS = {
 const ALL_MAPS = { CLASSIC, FUTSAL, VOLLEYBALL, CHAOS };
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { ALL_MAPS, CLASSIC, FUTSAL, VOLLEYBALL, CHAOS, C };
+  module.exports = { ALL_MAPS, CLASSIC, FUTSAL, VOLLEYBALL, CHAOS, C, makeWalls, makeGoalNetLines };
 }

@@ -178,6 +178,26 @@ function tryKick(player, ball, playerCfg) {
 // ============================================================
 // Apply player input
 // ============================================================
+// Reverted to the original model after two attempts at a "more directly
+// tunable" replacement both regressed real gameplay feel (a target-seeking
+// version caused an unnatural instant snap on diagonal input; a fixed-nudge
+// version removed the continuous resistance that gives short taps fine
+// control). The key property this restores: damping resists velocity build-up
+// on EVERY tick, including while accelerating — not just after releasing
+// input — so a brief tap only reaches a small fraction of top speed, and only
+// holding a direction for a while approaches the full cruising speed. That
+// resistance-while-building-up is what makes small, precise movements
+// possible; a model that lets accel add unopposed until a hard cap does not
+// have an equivalent.
+//
+// Tuning note: holding a direction settles at an equilibrium speed of
+// acceleration*damping/(1-damping) — maxSpeed is a hard safety clamp (used by
+// boosts/collisions that can exceed the equilibrium), not the practical top
+// speed, so raising maxSpeed alone does nothing unless it's still above that
+// equilibrium. To raise practical top speed, raise acceleration and/or
+// damping (both push the equilibrium up); to change responsiveness/tap
+// precision without changing top speed, adjust both together to keep the
+// equilibrium constant.
 function applyInput(disc, input, playerCfg) {
   let ax = 0, ay = 0;
   if (input.up)    ay -= 1;
@@ -191,8 +211,8 @@ function applyInput(disc, input, playerCfg) {
     ay = (ay / l) * playerCfg.acceleration;
   }
 
-  disc.vx += ax;
-  disc.vy += ay;
+  disc.vx = (disc.vx + ax) * playerCfg.damping;
+  disc.vy = (disc.vy + ay) * playerCfg.damping;
 
   const speed = len(disc.vx, disc.vy);
   if (speed > playerCfg.maxSpeed) {
@@ -240,11 +260,9 @@ function stepPhysics(state, map) {
     ball.vy *= ball.damping;
   }
 
-  for (const disc of state.discs) {
-    if (disc.isStatic) continue;
-    disc.vx *= disc.damping;
-    disc.vy *= disc.damping;
-  }
+  // Player discs don't get a damping multiply here — applyInput() already
+  // folds acceleration + damping together for them once per tick (see its
+  // comment), so this loop only ever needs to handle the ball.
 
   // 2. Calculate substeps: if any disc moves more than its radius per tick, subdivide
   const allMovable = [...state.balls, ...state.discs.filter(d => !d.isStatic)];
@@ -277,12 +295,14 @@ function stepPhysics(state, map) {
 
     // Disc-disc collisions
     const numBalls = state.balls.length;
-    const discsEnd = numBalls + state.discs.length;
     for (let i = 0; i < allDiscs.length; i++) {
       for (let j = i + 1; j < allDiscs.length; j++) {
         const hit = collideDiscDisc(allDiscs[i], allDiscs[j]);
-        // Ball-vs-player-disc contact (i is a ball, j is a player disc): record for attribution.
-        if (hit && i < numBalls && j >= numBalls && j < discsEnd) {
+        // Ball-vs-(player-disc-or-post) contact (i is a ball): record it. Consumers
+        // that only care about player touches (goal/assist attribution) already
+        // guard on the disc having an ownerId, so posts here are a harmless no-op
+        // for them — this is what lets a bumper-hit-flash effect reuse the same list.
+        if (hit && i < numBalls && j >= numBalls) {
           state.ballHits.push({ ball: allDiscs[i], disc: allDiscs[j] });
         }
       }

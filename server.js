@@ -11,6 +11,7 @@ const { WebSocketServer } = require('ws');
 const physics = require('./shared/physics');
 const { C } = physics;
 const { ALL_MAPS, CLASSIC } = require('./shared/maps');
+const { MODIFIERS, MODIFIERS_BY_ID } = require('./shared/modifiers');
 
 // ============================================================
 // Config
@@ -18,6 +19,8 @@ const { ALL_MAPS, CLASSIC } = require('./shared/maps');
 const PORT = process.env.PORT || 3000;
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
+const MOD_DURATION_TICKS = 20 * TICK_RATE;  // how long a modifier stays active
+const MOD_PAUSE_TICKS = 5 * TICK_RATE;      // quiet period between modifiers
 
 // ============================================================
 // Static file server
@@ -71,6 +74,9 @@ let gameState = null;
 let tickSeq = 0;           // monotonic tick counter, sent with each gameState
 let roomScoreLimit = CLASSIC.scoreLimit;  // admin-overridable, reset on map change
 let roomTimeLimit = CLASSIC.timeLimit;    // admin-overridable, reset on map change
+// Which modifier ids the admin has enabled for the current map — the modifier
+// loop only ever picks from this set. Reset to "all available" on map change.
+let roomEnabledModifiers = new Set(CLASSIC.modifiers || []);
 
 // Measures the actual setInterval firing rate (Hz) — if the Node event loop
 // falls behind (GC pauses, CPU contention), this drops below TICK_RATE and
@@ -93,6 +99,7 @@ function getPlayerList() {
       goals: p.goals || 0,
       assists: p.assists || 0,
       ownGoals: p.ownGoals || 0,
+      ping: p.ping || 0,
     });
   }
   return list;
@@ -109,6 +116,11 @@ function broadcastLobby() {
     roomPhase,
     scoreLimit: roomScoreLimit,
     timeLimit: roomTimeLimit,
+    availableModifiers: (currentMap.modifiers || []).map(id => {
+      const m = MODIFIERS_BY_ID[id];
+      return { id, name: m.name, desc: m.desc, icon: m.icon };
+    }),
+    enabledModifiers: [...roomEnabledModifiers],
   };
   broadcast(msg);
 }
@@ -128,8 +140,10 @@ function isAdmin(playerId) {
   return playerId === adminId;
 }
 
-function randomizeTeams() {
-  const ids = [...players.keys()];
+function randomizeTeams(includeSpectators) {
+  const ids = includeSpectators
+    ? [...players.keys()]
+    : [...players.keys()].filter(id => players.get(id).team !== 'spec');
   // Shuffle
   for (let i = ids.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -150,6 +164,48 @@ function randomizeTeams() {
 // ============================================================
 // Game State
 // ============================================================
+// Builds static goalpost/obstacle physics discs from plain specs
+// ({x,y,radius,bounce,color,cGroup,cMask}) — used both for the map's own
+// posts and for modifier-contributed obstacles (e.g. bumpers).
+function buildPostDiscs(specs) {
+  return specs.map(p => {
+    const disc = physics.createDisc({
+      x: p.x, y: p.y,
+      radius: p.radius,
+      bounce: p.bounce,
+      color: p.color,
+      isStatic: true,
+      mass: 999,
+      cGroup: p.cGroup ?? C.POST,
+      cMask: p.cMask ?? (C.BALL | C.PLAYER),
+    });
+    disc.isBumper = !!p.isBumper; // tags obstacle discs so the client can flash them on impact
+    return disc;
+  });
+}
+
+// Recomputes the effective walls/goals/posts/bg/visual from the map's base
+// geometry plus whatever the currently active modifier has declared in
+// gameState.modifierExtras. Only one modifier is active at a time, so each
+// modifier's activate() can just declare full replacement arrays (derived
+// from gameState.baseWalls/basePostSpecs/baseGoals) rather than needing to
+// merge with anyone else's contribution. Called on resetGame() and on every
+// modifier activate/deactivate transition — never every tick.
+function rebuildGeometry() {
+  if (!gameState) return;
+  const extras = gameState.modifierExtras || {};
+  gameState.walls = extras.walls || gameState.baseWalls;
+  gameState.goals = extras.goals || gameState.baseGoals;
+  gameState.posts = buildPostDiscs(extras.postSpecs || gameState.basePostSpecs);
+  gameState.bg = extras.bg || gameState.baseBg;
+  const baseVisual = gameState.baseVisual || {};
+  const goalNetLines = (extras.visual && extras.visual.goalNetLines) || baseVisual.goalNetLines || [];
+  gameState.visual = {
+    ...baseVisual,
+    lines: [...(baseVisual.lines || []), ...goalNetLines],
+  };
+}
+
 function resetGame() {
   const map = currentMap;
   for (const p of players.values()) { p.goals = 0; p.assists = 0; p.ownGoals = 0; }
@@ -166,35 +222,31 @@ function resetGame() {
     gravityScale: map.ball.gravityScale ?? 0,
   });
 
-  const posts = map.posts.map(p => physics.createDisc({
-    x: p.x, y: p.y,
-    radius: p.radius,
-    bounce: p.bounce,
-    color: p.color,
-    isStatic: true,
-    mass: 999,
-    cGroup: p.cGroup ?? C.POST,
-    cMask: p.cMask ?? (C.BALL | C.PLAYER),
-  }));
-
   gameState = {
     balls: [ball],
     discs: [],
-    posts,
-    walls: map.walls,
     score: { red: 0, blue: 0 },
     phase: 'playing', // playing | goal | ended
     timer: roomTimeLimit > 0 ? roomTimeLimit * TICK_RATE : 0,
     goalTimer: 0,
     lastScorer: null,
     goalInfo: null,
-    // Chaos event system (only if map defines chaosEvents)
-    chaos: map.chaosEvents ? {
+    // Base (map-default) geometry — never mutated, modifiers derive from these.
+    baseWalls: map.walls,
+    baseGoals: map.goals,
+    basePostSpecs: map.posts,
+    baseBg: map.bg,
+    baseVisual: map.visual,
+    // Active modifier's geometry contribution (if any); consumed by rebuildGeometry().
+    modifierExtras: {},
+    // Modifier system (only if map declares an available pool)
+    modifier: (map.modifiers && map.modifiers.length) ? {
       active: null,
-      timer: map.chaosPauseDuration,  // start with a pause before first event
+      timer: MOD_PAUSE_TICKS,  // start with a pause before the first modifier
     } : null,
   };
 
+  rebuildGeometry();
   repositionPlayers();
 }
 
@@ -232,7 +284,6 @@ function repositionPlayers() {
           y: baseY,
           radius: map.player.radius,
           mass: map.player.mass,
-          damping: map.player.damping,
           bounce: 0.5,
           color: p.team === 'red' ? '#e74c3c' : '#3498db',
           cGroup: p.team === 'red' ? C.RED : C.BLUE,
@@ -254,7 +305,6 @@ function repositionPlayers() {
           y: startY + i * spacing,
           radius: map.player.radius,
           mass: map.player.mass,
-          damping: map.player.damping,
           bounce: 0.5,
           color: p.team === 'red' ? '#e74c3c' : '#3498db',
           cGroup: p.team === 'red' ? C.RED : C.BLUE,
@@ -298,7 +348,6 @@ function spawnDiscForPlayer(p) {
     x, y,
     radius: cfg.radius,
     mass: cfg.mass,
-    damping: cfg.damping,
     bounce: 0.5,
     color: p.team === 'red' ? '#e74c3c' : '#3498db',
     cGroup: p.team === 'red' ? C.RED : C.BLUE,
@@ -342,24 +391,36 @@ function resetPositionsAfterGoal() {
 }
 
 // ============================================================
-// Chaos event effects
+// Modifier system — picks a random enabled modifier from shared/modifiers.js,
+// runs it for MOD_DURATION_TICKS, then pauses MOD_PAUSE_TICKS before the next.
 // ============================================================
-function applyChaosEffects(state, map) {
-  const ev = state.chaos.active;
-  if (ev && ev.id === 'bouncyWalls') {
-    // Ball bounce > 1.0 → walls ADD energy to ball on each hit
-    for (const ball of state.balls) ball.bounce = 2.0;
-  } else {
-    // Reset to map default
-    for (const ball of state.balls) ball.bounce = map.ball.bounce;
+function runModifierStep(state, map) {
+  const m = state.modifier;
+  if (!m) return;
+  m.timer--;
+  if (m.timer <= 0) {
+    if (m.active) {
+      if (m.active.deactivate) m.active.deactivate(state, map);
+      m.active = null;
+      rebuildGeometry();
+      m.timer = MOD_PAUSE_TICKS;
+    } else {
+      const pool = (map.modifiers || [])
+        .filter(id => roomEnabledModifiers.has(id))
+        .map(id => MODIFIERS_BY_ID[id])
+        .filter(Boolean);
+      if (pool.length) {
+        const chosen = pool[Math.floor(Math.random() * pool.length)];
+        m.active = chosen;
+        if (chosen.activate) chosen.activate(state, map);
+        rebuildGeometry();
+        m.timer = MOD_DURATION_TICKS;
+      } else {
+        m.timer = MOD_PAUSE_TICKS; // nothing enabled — stay idle, check again later
+      }
+    }
   }
-
-  if (ev && ev.id === 'playerBounce') {
-    // Huge bounce on player-player collisions
-    for (const disc of state.discs) if (!disc.isStatic) disc.bounce = 2.5;
-  } else {
-    for (const disc of state.discs) if (!disc.isStatic) disc.bounce = 0.5;
-  }
+  if (m.active && m.active.tick) m.active.tick(state, map);
 }
 
 // ============================================================
@@ -478,25 +539,8 @@ function gameTick() {
     // Fall through to input/physics below
   }
 
-  // ---- Chaos event system ----
-  if (gameState.chaos) {
-    const ch = gameState.chaos;
-    ch.timer--;
-    if (ch.timer <= 0) {
-      if (ch.active) {
-        // Event ended → start pause
-        ch.active = null;
-        ch.timer = map.chaosPauseDuration;
-      } else {
-        // Pause ended → pick random event
-        const pool = map.chaosEvents;
-        ch.active = pool[Math.floor(Math.random() * pool.length)];
-        ch.timer = map.chaosEventDuration;
-      }
-    }
-    // Apply event effects every tick (handles player join/leave cleanly)
-    applyChaosEffects(gameState, map);
-  }
+  // ---- Modifier system ----
+  runModifierStep(gameState, map);
 
   // Phase: playing (or goal celebration) - apply inputs
   for (const p of players.values()) {
@@ -541,10 +585,12 @@ function gameTick() {
     let scorer = null;
     let scoringBall = null;
     for (const ball of gameState.balls) {
-      scorer = physics.checkGoals(ball, map.goals);
+      scorer = physics.checkGoals(ball, gameState.goals);
       if (scorer) { scoringBall = ball; break; }
     }
     if (scorer) {
+      const activeMod = gameState.modifier && gameState.modifier.active;
+      if (activeMod && activeMod.transformScorer) scorer = activeMod.transformScorer(gameState, scorer);
       gameState.score[scorer]++;
       gameState.phase = 'goal';
       gameState.goalTimer = TICK_RATE * 2;
@@ -610,6 +656,10 @@ function sendGameState() {
     });
   }
 
+  const hitBumpers = new Set(
+    (gameState.ballHits || []).filter(h => h.disc.isBumper).map(h => h.disc)
+  );
+
   broadcast({
     type: 'gameState',
     seq: tickSeq,
@@ -629,16 +679,23 @@ function sendGameState() {
     mapInfo: {
       w: currentMap.width,
       h: currentMap.height,
-      bg: currentMap.bg,
-      goals: currentMap.goals,
-      visual: currentMap.visual,
-      posts: currentMap.posts.map(p => ({ x: p.x, y: p.y, radius: p.radius, color: p.color })),
-      walls: currentMap.walls.map(w => ({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, cGroup: w.cGroup })),
+      bg: gameState.bg,
+      goals: gameState.goals,
+      visual: gameState.visual,
+      posts: gameState.posts.map(p => ({
+        x: p.x, y: p.y, radius: p.radius, color: p.color,
+        flash: hitBumpers.has(p),
+      })),
+      walls: gameState.walls.map(w => ({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, cGroup: w.cGroup })),
       kickRadius: currentMap.player.kickRadius,
     },
-    chaos: gameState.chaos ? {
-      active: gameState.chaos.active,   // null or { id, name, desc }
-      timer: gameState.chaos.timer,     // ticks remaining
+    modifier: gameState.modifier ? {
+      active: gameState.modifier.active ? {
+        id: gameState.modifier.active.id,
+        name: gameState.modifier.active.name,
+        desc: gameState.modifier.active.desc,
+      } : null,
+      timer: gameState.modifier.timer,   // ticks remaining
     } : null,
   });
 }
@@ -659,6 +716,7 @@ function handleJoin(ws, data) {
     goals: 0,
     assists: 0,
     ownGoals: 0,
+    ping: 0,
   };
   players.set(id, player);
 
@@ -713,9 +771,9 @@ function handleAdminMovePlayer(playerId, data) {
   broadcastLobby();
 }
 
-function handleAdminRandomize(playerId) {
+function handleAdminRandomize(playerId, data) {
   if (!isAdmin(playerId)) return;
-  randomizeTeams();
+  randomizeTeams(!!(data && data.includeSpectators));
   // Randomize reassigns everyone's team at once — repositioning the whole
   // field here is the intended, admin-initiated exception to the
   // "don't teleport everyone" rule.
@@ -795,6 +853,7 @@ function handleChangeMap(playerId, data) {
   // Reset overrides to new map's defaults
   roomScoreLimit = currentMap.scoreLimit;
   roomTimeLimit = currentMap.timeLimit;
+  roomEnabledModifiers = new Set(currentMap.modifiers || []);
   if (roomPhase === 'playing' || roomPhase === 'paused') {
     roomPhase = 'lobby';
     gameState = null;
@@ -816,18 +875,34 @@ function handleChangeScoreLimit(playerId, data) {
 function handleChangeTimeLimit(playerId, data) {
   if (!isAdmin(playerId)) return;
   const val = parseInt(data.value, 10);
-  if (isNaN(val) || val < 0 || val > 999) return;
+  if (isNaN(val) || val < 0 || val > 1800) return;
   roomTimeLimit = val;
   broadcastLobby();
 }
 
-function handleRestart(playerId) {
+function handleSetModifierEnabled(playerId, data) {
   if (!isAdmin(playerId)) return;
-  if (roomPhase !== 'playing') return;
-  resetGame();
-  broadcast({ type: 'restart' });
-  console.log('[*] Game restarted');
+  const id = data.id;
+  if (!MODIFIERS_BY_ID[id] || !(currentMap.modifiers || []).includes(id)) return;
+  if (data.enabled) roomEnabledModifiers.add(id);
+  else roomEnabledModifiers.delete(id);
+  broadcastLobby();
 }
+
+function handlePing(playerId, data) {
+  const player = players.get(playerId);
+  if (!player) return;
+  if (typeof data.lastPing === 'number' && isFinite(data.lastPing)) {
+    player.ping = Math.max(0, Math.min(9999, Math.round(data.lastPing)));
+    // Deliberately NOT broadcastLobby() here — this fires ~once/sec per player,
+    // and a full lobby rebuild closes any open <select> (e.g. the map picker)
+    // since the browser drops a native dropdown's open state when its DOM node
+    // is replaced. Ping is cosmetic, so it gets its own tiny targeted message
+    // instead of forcing a structural admin-bar re-render.
+    broadcast({ type: 'pingUpdate', id: playerId, ping: player.ping });
+  }
+}
+
 
 function handleInput(playerId, data) {
   if (roomPhase !== 'playing') return;
@@ -910,13 +985,13 @@ wss.on('connection', (ws) => {
 
     switch (data.type) {
       case 'join':           playerId = handleJoin(ws, data); break;
-      case 'ping':           ws.send(JSON.stringify({ type: 'pong', t: data.t })); break;
+      case 'ping':           if (playerId) handlePing(playerId, data); ws.send(JSON.stringify({ type: 'pong', t: data.t })); break;
       case 'input':          handleInput(playerId, data); break;
       case 'chat':           if (playerId) handleChat(playerId, data); break;
       case 'cheat':          if (playerId) handleCheat(playerId, data); break;
       case 'selfTeam':       if (playerId) handleSelfTeam(playerId, data); break;
       case 'adminMove':      if (playerId) handleAdminMovePlayer(playerId, data); break;
-      case 'adminRandomize': if (playerId) handleAdminRandomize(playerId); break;
+      case 'adminRandomize': if (playerId) handleAdminRandomize(playerId, data); break;
       case 'adminToggleFJ':  if (playerId) handleAdminToggleFreeJoin(playerId); break;
       case 'adminTransfer':  if (playerId) handleAdminTransfer(playerId, data); break;
       case 'startGame':      if (playerId) handleStartGame(playerId); break;
@@ -926,7 +1001,7 @@ wss.on('connection', (ws) => {
       case 'changeMap':      if (playerId) handleChangeMap(playerId, data); break;
       case 'changeScoreLimit': if (playerId) handleChangeScoreLimit(playerId, data); break;
       case 'changeTimeLimit':  if (playerId) handleChangeTimeLimit(playerId, data); break;
-      case 'restart':        if (playerId) handleRestart(playerId); break;
+      case 'setModifierEnabled': if (playerId) handleSetModifierEnabled(playerId, data); break;
     }
   });
 

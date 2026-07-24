@@ -61,9 +61,9 @@
   #hud .sb { color: #3498db; font-size: 26px; }
   #hud .timer { color: #aaa; font-size: 15px; }
   #hud .phase { color: #e94560; font-size: 13px; }
-  #hud .chaos-event { font-size: 13px; font-weight: bold; }
-  #hud .chaos-event.active { color: #ff9800; }
-  #hud .chaos-event.pause { color: #888; }
+  #hud .modifier-event { font-size: 13px; font-weight: bold; }
+  #hud .modifier-event.active { color: #ff9800; }
+  #hud .modifier-event.pause { color: #888; }
   #hud .hint { color: #666; font-size: 11px; position: absolute; right: 12px; }
 
   /* ---- Lobby overlay ---- */
@@ -91,6 +91,8 @@
     display: flex; gap: 8px; flex-wrap: wrap;
     justify-content: center;
     padding: 6px 0;
+    max-width: 1000px;
+    margin: 0 auto;
   }
   .admin-bar button, .admin-bar select {
     font-size: 13px; padding: 6px 16px;
@@ -110,7 +112,7 @@
   .admin-bar .ab-field input:focus { border-color: #e94560; }
   .admin-bar button.primary {
     background: #27ae60; color: white; border-color: #27ae60;
-    font-weight: bold; font-size: 15px; padding: 8px 28px;
+    font-weight: bold;
   }
   .admin-bar button.primary:hover { background: #219a52; }
   .admin-bar button.danger {
@@ -122,6 +124,23 @@
   .admin-bar button.active {
     background: #2980b9; border-color: #3498db; color: white;
   }
+  .admin-bar .btn-group { display: inline-flex; }
+  .admin-bar .btn-group button {
+    border-radius: 0; margin-left: -1px;
+  }
+  .admin-bar .btn-group button:first-child { border-radius: 5px 0 0 5px; margin-left: 0; }
+  .admin-bar .btn-group button:last-child { border-radius: 0 5px 5px 0; }
+  .admin-bar .mod-list {
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px;
+    font-size: 12px; color: #999;
+    border: 1px solid #333; border-radius: 5px; padding: 4px 8px;
+    flex-basis: 100%;   /* always starts its own row, never crammed onto the controls line */
+  }
+  .admin-bar .mod-chip {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 11px; color: #ccc; cursor: pointer; white-space: nowrap;
+  }
+  .admin-bar .mod-chip input { cursor: pointer; }
 
   /* Team columns */
   .teams-container {
@@ -173,6 +192,15 @@
     border-radius: 3px; font-weight: bold;
   }
   .player-row .stats { font-size: 11px; color: #9ad6a3; white-space: nowrap; }
+  .player-row .ping {
+    font-size: 10px; white-space: nowrap; flex-shrink: 0;
+    width: 38px; text-align: center;
+    padding: 2px 0; border-radius: 3px;
+    background: rgba(0,0,0,0.35);
+  }
+  .player-row .ping.ping-good { color: #7ed957; }
+  .player-row .ping.ping-ok { color: #f4d35e; }
+  .player-row .ping.ping-bad { color: #e74c3c; }
   .player-row .badge.admin { background: #f39c12; color: #000; }
   .player-row .badge.you { background: #e94560; color: #fff; }
   .player-row .actions { display: flex; gap: 4px; flex-shrink: 0; }
@@ -298,7 +326,7 @@
   <span class="timer" id="timer"></span>
   <span class="sb" id="score-blue">0</span>
   <span class="phase" id="phase-label"></span>
-  <span class="chaos-event" id="chaos-event"></span>
+  <span class="modifier-event" id="modifier-event"></span>
   <span class="hint">ESC = lobby</span>
 </div>
 
@@ -314,6 +342,7 @@
     <div class="team-col spec-col">
       <div class="team-header">Spec</div>
       <div class="team-list" id="team-spec"></div>
+      <button class="join-btn" id="join-spec">Join Spec</button>
     </div>
     <div class="team-col blue-col">
       <div class="team-header">Blue</div>
@@ -408,7 +437,7 @@
   const scoreBlueEl = document.getElementById('score-blue');
   const timerEl     = document.getElementById('timer');
   const phaseLabel  = document.getElementById('phase-label');
-  const chaosEventEl = document.getElementById('chaos-event');
+  const modifierEventEl = document.getElementById('modifier-event');
   const lobbyEl     = document.getElementById('lobby-overlay');
   const adminBarEl  = document.getElementById('admin-bar');
   const teamRedEl   = document.getElementById('team-red');
@@ -416,6 +445,7 @@
   const teamSpecEl  = document.getElementById('team-spec');
   const joinRedBtn  = document.getElementById('join-red');
   const joinBlueBtn = document.getElementById('join-blue');
+  const joinSpecBtn = document.getElementById('join-spec');
   const lobbyStatus = document.getElementById('lobby-status');
   const soundToggle = document.getElementById('sound-toggle');
   const connToast   = document.getElementById('conn-toast');
@@ -436,6 +466,7 @@
   let endedLobbyTimer = null;
   let pingMs = 0;
   let pingInterval = null;
+  const bumperFlashUntil = new Map(); // post index -> timestamp; extends a 1-tick server flag into a visible pulse
 
   // ---- Chat ----
   let chatOpen = false;
@@ -552,7 +583,7 @@
       ws.send(JSON.stringify({ type: 'join', name: myName }));
       // Ping loop: measure RTT every second
       pingInterval = setInterval(() => {
-        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping', t: performance.now() }));
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping', t: performance.now(), lastPing: pingMs }));
       }, 1000);
     };
 
@@ -594,6 +625,23 @@
         lobbyData = msg;
         renderLobby();
         break;
+
+      case 'pingUpdate': {
+        // Deliberately a targeted DOM patch, not renderLobby() — a full
+        // rebuild here (this fires ~once/sec per player) would close any open
+        // <select> (e.g. the map picker), since the browser drops a native
+        // dropdown's open state whenever its DOM node is replaced.
+        if (lobbyData) {
+          const p = lobbyData.players.find(pl => pl.id === msg.id);
+          if (p) p.ping = msg.ping;
+        }
+        const row = lobbyEl.querySelector(`.player-row[data-pid="${msg.id}"] .ping`);
+        if (row) {
+          row.textContent = `${msg.ping}ms`;
+          row.className = 'ping ' + (msg.ping < 50 ? 'ping-good' : msg.ping < 120 ? 'ping-ok' : 'ping-bad');
+        }
+        break;
+      }
 
       case 'chat':
         appendChatMessage(msg);
@@ -795,6 +843,7 @@
 
   joinRedBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'red' }));
   joinBlueBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'blue' }));
+  joinSpecBtn.addEventListener('click', () => send({ type: 'selfTeam', team: 'spec' }));
 
   // Sound toggle
   function updateSoundToggle() {
@@ -810,15 +859,27 @@
 
   function renderLobby() {
     if (!lobbyData) return;
-    const { players, adminId, freeJoin, currentMap, maps, roomPhase, scoreLimit, timeLimit } = lobbyData;
+    const { players, adminId, freeJoin, currentMap, maps, roomPhase, scoreLimit, timeLimit,
+            availableModifiers, enabledModifiers } = lobbyData;
     const iAmAdmin = myId === adminId;
 
     // Disable join buttons if freeJoin is off and not admin
     const canSelfJoin = freeJoin || iAmAdmin;
     joinRedBtn.style.display = canSelfJoin ? '' : 'none';
     joinBlueBtn.style.display = canSelfJoin ? '' : 'none';
+    joinSpecBtn.style.display = canSelfJoin ? '' : 'none';
 
     // ---- Admin bar ----
+    // Skip rebuilding while the admin is actively typing in a number field
+    // inside it (Goals/Time) — lobby broadcasts arrive often (ping updates
+    // land ~1/sec per player) and a full innerHTML rebuild would wipe out
+    // in-progress, not-yet-committed keystrokes. Deliberately narrow (number
+    // inputs only, not the map <select> or checkboxes) — those don't accumulate
+    // uncommitted state, and guarding them just delayed the modifier checklist
+    // from appearing right after picking a map.
+    const active = document.activeElement;
+    const editingAdminBar = active && active.tagName === 'INPUT' && active.type === 'number' && adminBarEl.contains(active);
+    if (!editingAdminBar) {
     let ab = '';
     if (iAmAdmin) {
       // Map select
@@ -830,26 +891,42 @@
 
       // Score limit & time limit
       ab += `<span class="ab-field">Goals: <input type="number" id="ab-score" min="0" max="99" value="${scoreLimit}"></span>`;
-      ab += `<span class="ab-field">Time(s): <input type="number" id="ab-time" min="0" max="999" value="${timeLimit}"></span>`;
+      ab += `<span class="ab-field">Time(min): <input type="number" id="ab-time" min="0" max="30" step="1" value="${Math.round(timeLimit / 60)}"></span>`;
 
       if (roomPhase === 'lobby') {
         ab += '<button class="primary" data-action="start">Start Game</button>';
       } else if (roomPhase === 'playing') {
         ab += '<button class="warn" data-action="pause">Pause</button>';
         ab += '<button class="danger" data-action="stop">Stop Game</button>';
-        ab += '<button data-action="restart">Restart</button>';
       } else if (roomPhase === 'paused') {
         ab += '<button class="primary" data-action="resume">Resume</button>';
         ab += '<button class="danger" data-action="stop">Stop Game</button>';
-        ab += '<button data-action="restart">Restart</button>';
       }
-      ab += '<button data-action="randomize">Randomize Teams</button>';
+      ab += '<span class="ab-field">Randomize:</span>';
+      ab += '<span class="btn-group">';
+      ab += '<button data-action="randomizeAll" title="Shuffle everyone, including spectators, onto Red/Blue">All</button>';
+      ab += '<button data-action="randomizeTeams" title="Shuffle only current Red/Blue players — spectators stay put">R&amp;B</button>';
+      ab += '</span>';
       ab += `<button class="${freeJoin ? 'active' : ''}" data-action="toggleFJ">${freeJoin ? 'Free Join: ON' : 'Free Join: OFF'}</button>`;
+
+      if (availableModifiers && availableModifiers.length) {
+        ab += '<span class="mod-list">Modifiers:';
+        availableModifiers.forEach(m => {
+          const checked = enabledModifiers.includes(m.id) ? 'checked' : '';
+          ab += `<label class="mod-chip" title="${escHTML(m.desc)}">` +
+                `<input type="checkbox" data-mod="${m.id}" ${checked}>${m.icon || ''} ${escHTML(m.name)}</label>`;
+        });
+        ab += '</span>';
+      }
     } else {
       ab += `<span style="color:#888;font-size:13px;">Map: ${escHTML(currentMap)}</span>`;
       ab += `<span style="color:#888;font-size:12px;">Goals: ${scoreLimit || '\u221E'} | Time: ${timeLimit ? timeLimit + 's' : '\u221E'}</span>`;
       if (roomPhase === 'paused') {
         ab += '<span style="color:#e67e22;font-size:13px;font-weight:bold;">PAUSED</span>';
+      }
+      if (availableModifiers && availableModifiers.length) {
+        const names = availableModifiers.filter(m => enabledModifiers.includes(m.id)).map(m => m.icon || m.name).join(' ');
+        ab += `<span style="color:#888;font-size:12px;">Modifiers: ${names || 'none'}</span>`;
       }
     }
     adminBarEl.innerHTML = ab;
@@ -865,7 +942,7 @@
     }
     const abTime = document.getElementById('ab-time');
     if (abTime) {
-      abTime.addEventListener('change', () => send({ type: 'changeTimeLimit', value: abTime.value }));
+      abTime.addEventListener('change', () => send({ type: 'changeTimeLimit', value: Number(abTime.value) * 60 }));
     }
     adminBarEl.querySelectorAll('button[data-action]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -874,11 +951,17 @@
         if (a === 'pause')     send({ type: 'pauseGame' });
         if (a === 'resume')    send({ type: 'resumeGame' });
         if (a === 'stop')      send({ type: 'stopGame' });
-        if (a === 'restart')   send({ type: 'restart' });
-        if (a === 'randomize') send({ type: 'adminRandomize' });
+        if (a === 'randomizeAll')   send({ type: 'adminRandomize', includeSpectators: true });
+        if (a === 'randomizeTeams') send({ type: 'adminRandomize', includeSpectators: false });
         if (a === 'toggleFJ')  send({ type: 'adminToggleFJ' });
       });
     });
+    adminBarEl.querySelectorAll('input[data-mod]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        send({ type: 'setModifierEnabled', id: cb.dataset.mod, enabled: cb.checked });
+      });
+    });
+    }
 
     // ---- Team lists ----
     const red  = players.filter(p => p.team === 'red');
@@ -936,7 +1019,11 @@
       stats = `<span class="stats">${parts.join(' ')}</span>`;
     }
 
-    return `<div class="player-row">
+    const pingClass = p.ping < 50 ? 'ping-good' : p.ping < 120 ? 'ping-ok' : 'ping-bad';
+    const ping = `<span class="ping ${pingClass}">${p.ping || 0}ms</span>`;
+
+    return `<div class="player-row" data-pid="${p.id}">
+      ${ping}
       <span class="name">${escHTML(p.name)}</span>
       ${stats}
       ${badges}
@@ -1031,7 +1118,7 @@
       balls, players,
       score: state.score, phase: state.phase, timer: state.timer,
       lastScorer: state.lastScorer, goalInfo: state.goalInfo, map: state.map, mapInfo: state.mapInfo,
-      chaos: state.chaos,
+      modifier: state.modifier,
     };
   }
 
@@ -1052,7 +1139,9 @@
 
   // ---- Render loop ----
   let fps = 0;
+  let displayFps = 0;
   let lastFrameTime = performance.now();
+  let lastFpsDisplayUpdate = performance.now();
   function renderLoop() {
     const now = performance.now();
     const dt = now - lastFrameTime;
@@ -1060,6 +1149,10 @@
     if (dt > 0) {
       const instFps = 1000 / dt;
       fps = fps ? fps * 0.9 + instFps * 0.1 : instFps;
+    }
+    if (now - lastFpsDisplayUpdate >= 1000) {
+      displayFps = Math.round(fps);
+      lastFpsDisplayUpdate = now;
     }
     render();
     requestAnimationFrame(renderLoop);
@@ -1100,20 +1193,20 @@
     else
       phaseLabel.textContent = '';
 
-    // Chaos event HUD
-    const ch = state.chaos;
+    // Modifier HUD
+    const ch = state.modifier;
     if (ch) {
       const secs = Math.ceil(ch.timer / 60);
       if (ch.active) {
-        chaosEventEl.textContent = `${ch.active.name} — ${secs}s`;
-        chaosEventEl.className = 'chaos-event active';
+        modifierEventEl.textContent = `${ch.active.name} — ${secs}s`;
+        modifierEventEl.className = 'modifier-event active';
       } else {
-        chaosEventEl.textContent = `Next event in ${secs}s`;
-        chaosEventEl.className = 'chaos-event pause';
+        modifierEventEl.textContent = `Next modifier in ${secs}s`;
+        modifierEventEl.className = 'modifier-event pause';
       }
     } else {
-      chaosEventEl.textContent = '';
-      chaosEventEl.className = 'chaos-event';
+      modifierEventEl.textContent = '';
+      modifierEventEl.className = 'modifier-event';
     }
 
     // ---- Field (data-driven from mapInfo) ----
@@ -1140,9 +1233,9 @@
     ctx.fillStyle = mi.bg || '#718C5A';
     ctx.fillRect(ftl.x, ftl.y, fbr.x - ftl.x, fbr.y - ftl.y);
 
-    // Field border (orange glow during Bouncy Walls chaos event)
-    const chaosBouncyActive = ch && ch.active && ch.active.id === 'bouncyWalls';
-    if (chaosBouncyActive) {
+    // Field border (orange glow during the Bouncy Walls modifier)
+    const bouncyWallsActive = ch && ch.active && ch.active.id === 'bouncyWalls';
+    if (bouncyWallsActive) {
       ctx.save();
       ctx.shadowColor = '#ff9800';
       ctx.shadowBlur = 18 * scale;
@@ -1180,14 +1273,23 @@
     }
 
     // Goal posts
-    for (const post of (mi.posts || [])) {
+    (mi.posts || []).forEach((post, i) => {
+      if (post.flash) bumperFlashUntil.set(i, Date.now() + 150);
+      const flashing = bumperFlashUntil.has(i) && Date.now() < bumperFlashUntil.get(i);
+
       const p = ts(post.x, post.y);
       const r = post.radius * scale;
+      if (flashing) {
+        ctx.save();
+        ctx.shadowColor = '#ffffff';
+        ctx.shadowBlur = 20 * scale;
+      }
       ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = post.color || '#fff';
+      ctx.fillStyle = flashing ? '#ffffff' : (post.color || '#fff');
       ctx.fill();
       ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke();
-    }
+      if (flashing) ctx.restore();
+    });
 
     // Balls
     for (const ball of state.balls) {
@@ -1395,8 +1497,8 @@
     const pingColor = pingMs < 50 ? 'rgba(100,255,100,0.7)' : pingMs < 120 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
     drawPerfSeg(`${pingMs}ms`, pingColor);
 
-    const fpsColor = fps > 50 ? 'rgba(100,255,100,0.7)' : fps > 30 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
-    drawPerfSeg(`${Math.round(fps)}fps`, fpsColor);
+    const fpsColor = displayFps > 50 ? 'rgba(100,255,100,0.7)' : displayFps > 30 ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.7)';
+    drawPerfSeg(`${displayFps}fps`, fpsColor);
 
     if (latestState && latestState.tickRate != null) {
       const tr = Math.round(latestState.tickRate);
