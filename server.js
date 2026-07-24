@@ -1158,12 +1158,20 @@ function runTick() {
 }
 
 // Self-correcting tick loop. `setInterval`/`setTimeout` are bound to the OS's
-// timer resolution (Windows defaults to ~15.6ms ticks, which doesn't divide
-// evenly into our 16.67ms budget and can silently halve the real rate).
+// timer resolution — Windows defaults to ~15.6ms ticks, which doesn't divide
+// evenly into our 16.67ms budget and can silently halve the real rate.
 // `setImmediate` isn't subject to that floor — it fires as soon as the event
-// loop is free — so we poll with it and only do real work once enough time
-// has actually elapsed, per process.hrtime(). Bounded catch-up avoids a
-// death-spiral if something genuinely stalls the loop.
+// loop is free — so on Windows we poll with it and only do real work once
+// enough time has actually elapsed, per process.hrtime(). Bounded catch-up
+// avoids a death-spiral if something genuinely stalls the loop.
+//
+// That polling is a busy-spin: it pins a core near 100% permanently, which is
+// wasted cost/heat on a real server and (on cheap cloud VMs) reads as
+// constant load that drains burst-credit CPU quotas. Linux/macOS don't have
+// Windows' coarse timer floor — `setTimeout` there is accurate to ~1ms — so
+// elsewhere we sleep through most of the tick budget and only spin-correct
+// the last ~1-2ms, for the same precision at a small fraction of the CPU use.
+const IS_WINDOWS = process.platform === 'win32';
 const TICK_NS = BigInt(Math.round(TICK_MS * 1e6));
 let nextTickTime = process.hrtime.bigint();
 
@@ -1178,6 +1186,14 @@ function tickLoop() {
   if (ranTicks >= 5) {
     // Fell too far behind to catch up — resync instead of spiraling.
     nextTickTime = now + TICK_NS;
+  }
+
+  if (!IS_WINDOWS) {
+    const remainingMs = Number(nextTickTime - process.hrtime.bigint()) / 1e6;
+    if (remainingMs > 2) {
+      setTimeout(tickLoop, remainingMs - 1);
+      return;
+    }
   }
   setImmediate(tickLoop);
 }
