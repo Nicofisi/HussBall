@@ -115,13 +115,13 @@ const CLASSIC = {
   ],
 
   posts: [
-    { x: -840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#dc3545',
+    { x: -840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#dc3545', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x: -840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#dc3545',
+    { x: -840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#dc3545', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x:  840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#3b82f6',
+    { x:  840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#3b82f6', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x:  840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#3b82f6',
+    { x:  840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#3b82f6', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
   ],
 
@@ -194,13 +194,13 @@ const FUTSAL = {
   ],
 
   posts: [
-    { x: -620 / 2, y: -60, radius: 6, bounce: 0.5, color: '#dc3545',
+    { x: -620 / 2, y: -60, radius: 6, bounce: 0.5, color: '#dc3545', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x: -620 / 2, y:  60, radius: 6, bounce: 0.5, color: '#dc3545',
+    { x: -620 / 2, y:  60, radius: 6, bounce: 0.5, color: '#dc3545', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x:  620 / 2, y: -60, radius: 6, bounce: 0.5, color: '#3b82f6',
+    { x:  620 / 2, y: -60, radius: 6, bounce: 0.5, color: '#3b82f6', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x:  620 / 2, y:  60, radius: 6, bounce: 0.5, color: '#3b82f6',
+    { x:  620 / 2, y:  60, radius: 6, bounce: 0.5, color: '#3b82f6', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
   ],
 
@@ -371,13 +371,13 @@ const CHAOS = {
   ],
 
   posts: [
-    { x: -840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#dc3545',
+    { x: -840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#dc3545', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x: -840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#dc3545',
+    { x: -840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#dc3545', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x:  840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#3b82f6',
+    { x:  840 / 2, y: -80, radius: 8, bounce: 0.5, color: '#3b82f6', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
-    { x:  840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#3b82f6',
+    { x:  840 / 2, y:  80, radius: 8, bounce: 0.5, color: '#3b82f6', isGoalPost: true,
       cGroup: C.POST, cMask: C.BALL | C.PLAYER },
   ],
 

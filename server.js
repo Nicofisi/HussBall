@@ -210,6 +210,7 @@ function buildPostDiscs(specs) {
         });
     obj.isBumper = !!p.isBumper; // tags obstacle objects so the client can flash them on impact
     obj.isKicker = !!p.isKicker; // tags "kicker" obstacles that actively kick the ball on contact
+    obj.isGoalPost = !!p.isGoalPost; // tags the map's own corner posts, not bumper-layout obstacles
     return obj;
   });
 }
@@ -440,6 +441,17 @@ function enforceKickoffRestriction(state, map) {
   const kr = state.kickoffRestriction;
   if (!kr || !map.kickoffRadius) return;
   const R = map.kickoffRadius;
+
+  // Solo play/debugging: with either team empty, there's no real opponent
+  // for the rule to be fair between, and it'd just get in the way of
+  // testing alone — skip it entirely rather than lock someone out of half
+  // the pitch with nobody on the other side.
+  let redCount = 0, blueCount = 0;
+  for (const p of players.values()) {
+    if (p.team === 'red') redCount++;
+    else if (p.team === 'blue') blueCount++;
+  }
+  if (redCount === 0 || blueCount === 0) return;
 
   for (const p of players.values()) {
     if ((p.team !== 'red' && p.team !== 'blue') || !p.disc) continue;
@@ -868,6 +880,7 @@ function sendGameState() {
         shape: 'circle',
         x: p.x, y: p.y, radius: p.radius, color: p.color,
         flash: hitBumpers.has(p),
+        isGoalPost: !!p.isGoalPost,
       }),
       walls: gameState.walls.map(w => ({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, cGroup: w.cGroup })),
       kickRadius: currentMap.player.kickRadius,

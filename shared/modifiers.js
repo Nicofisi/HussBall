@@ -205,7 +205,10 @@ const MODIFIERS = [
     activate(state, map) {
       const layouts = map.bumperLayouts || [];
       const layout = layouts.length ? layouts[Math.floor(Math.random() * layouts.length)] : [];
-      state.modifierExtras.postSpecs = [...state.basePostSpecs, ...layout];
+      // Goal posts get the same bounce boost as the walls — keeps their team
+      // color/identity untouched, just makes contact bouncier to match.
+      const bouncyGoalPosts = state.basePostSpecs.map(p => ({ ...p, bounce: WALL_TIER_BOUNCE }));
+      state.modifierExtras.postSpecs = [...bouncyGoalPosts, ...layout];
       state.modifierExtras.walls = state.baseWalls.map(w =>
         w.cGroup === physics.C.WALL ? { ...w, bounce: WALL_TIER_BOUNCE } : w
       );

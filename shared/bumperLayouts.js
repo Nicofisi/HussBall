@@ -63,14 +63,28 @@ function trapezoidPoints(topW, bottomW, height) {
     { x: bottomW / 2, y: height / 2 }, { x: -bottomW / 2, y: height / 2 },
   ];
 }
-function triangle(x, y, size, cornerRadius, kind) {
-  return polyShape(x, y, trianglePoints(size), cornerRadius, kind);
+// Diamonds and (axis-aligned, unrotated) rects are already invariant under
+// 180° rotation about their own center, so a diagonal pair of either is
+// automatically point-symmetric with no extra work. Triangles and unequal
+// trapezoids are NOT — apex-up stays apex-up no matter where you place it —
+// so a diagonal (point-symmetric-position) pair needs the second instance
+// explicitly rotated 180°, via this optional param, or it's two identically
+// oriented shapes at mirrored spots, not a true symmetric pair.
+function rotatePoints(points, deg) {
+  const rad = deg * Math.PI / 180;
+  const c = Math.cos(rad), s = Math.sin(rad);
+  return points.map(p => ({ x: p.x * c - p.y * s, y: p.x * s + p.y * c }));
+}
+function triangle(x, y, size, cornerRadius, kind, rotationDeg) {
+  const pts = rotationDeg ? rotatePoints(trianglePoints(size), rotationDeg) : trianglePoints(size);
+  return polyShape(x, y, pts, cornerRadius, kind);
 }
 function diamond(x, y, w, h, cornerRadius, kind) {
   return polyShape(x, y, diamondPoints(w, h), cornerRadius, kind);
 }
-function trapezoid(x, y, topW, bottomW, height, cornerRadius, kind) {
-  return polyShape(x, y, trapezoidPoints(topW, bottomW, height), cornerRadius, kind);
+function trapezoid(x, y, topW, bottomW, height, cornerRadius, kind, rotationDeg) {
+  const pts = rotationDeg ? rotatePoints(trapezoidPoints(topW, bottomW, height), rotationDeg) : trapezoidPoints(topW, bottomW, height);
+  return polyShape(x, y, pts, cornerRadius, kind);
 }
 
 // Each layout is symmetric (mirrored and/or point-symmetric about the
@@ -123,9 +137,12 @@ const LAYOUTS = [
   [
     softBumper(0, -130, 26), softBumper(-140, 90, 26), softBumper(140, 90, 26),
   ],
-  // Two big teal triangles (diagonal) + a smaller counter-diagonal kicker pair
+  // Two big teal triangles (diagonal) + a smaller counter-diagonal kicker pair.
+  // Second triangle rotated 180° — diagonal placement is point-symmetric, so
+  // without also flipping the shape's own orientation it'd just be two
+  // identically-apex-up triangles at mirrored spots, not a true symmetric pair.
   [
-    triangle(-160, -110, 55, 16, 'teal'), triangle(160, 110, 55, 16, 'teal'),
+    triangle(-160, -110, 55, 16, 'teal'), triangle(160, 110, 55, 16, 'teal', 180),
     kicker(-60, 60, 18), kicker(60, -60, 18),
   ],
   // Diamond quad, different sizes: big kickers top/bottom, smaller teal left/right
@@ -143,10 +160,12 @@ const LAYOUTS = [
     triangle(-200, -100, 35, 10, 'kicker'), triangle(200, -100, 35, 10, 'kicker'),
     triangle(-200, 100, 35, 10, 'kicker'), triangle(200, 100, 35, 10, 'kicker'),
   ],
-  // Mixed-shape showcase: teal trapezoids (diagonal) + kicker triangles (counter-diagonal)
+  // Mixed-shape showcase: teal trapezoids (diagonal) + kicker triangles
+  // (counter-diagonal). Both diagonal pairs need their second shape rotated
+  // 180° for the same reason as the triangle layout above.
   [
-    trapezoid(-170, -60, 50, 80, 60, 12, 'teal'), trapezoid(170, 60, 50, 80, 60, 12, 'teal'),
-    triangle(-70, 90, 30, 10, 'kicker'), triangle(70, -90, 30, 10, 'kicker'),
+    trapezoid(-170, -60, 50, 80, 60, 12, 'teal'), trapezoid(170, 60, 50, 80, 60, 12, 'teal', 180),
+    triangle(-70, 90, 30, 10, 'kicker'), triangle(70, -90, 30, 10, 'kicker', 180),
   ],
   // Two large teal diamonds (diagonal) + small kicker accents (counter-diagonal)
   [

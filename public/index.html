@@ -510,23 +510,6 @@
     ctx.closePath();
   }
 
-  // Traces a rounded-corner path through an arbitrary polygon (SCREEN-space
-  // points, already transformed) — the standard "moveTo the midpoint of the
-  // last edge, then arcTo each vertex in turn" technique; generalizes
-  // roundedRectPath to any vertex count.
-  function roundedPolygonPath(ctx, points, r) {
-    const n = points.length;
-    if (n < 3) return;
-    ctx.beginPath();
-    const prev = points[n - 1], first = points[0];
-    ctx.moveTo((prev.x + first.x) / 2, (prev.y + first.y) / 2);
-    for (let i = 0; i < n; i++) {
-      const curr = points[i], next = points[(i + 1) % n];
-      ctx.arcTo(curr.x, curr.y, next.x, next.y, r);
-    }
-    ctx.closePath();
-  }
-
   // ---- Chat ----
   let chatOpen = false;
   const CHAT_FADE_MS = 5000;
@@ -1418,6 +1401,23 @@
     ctx.fillStyle = mi.bg || '#718C5A';
     ctx.fillRect(ftl.x, ftl.y, fbr.x - ftl.x, fbr.y - ftl.y);
 
+    // Field border, drawn as 4 segments (not one strokeRect) with a gap left
+    // and right at the goal mouth — there's no real wall there (it's the
+    // scoring gap), so the border (and its teal Bumpers glow, since the
+    // actual wall segments get boosted but the goal net stays soft on
+    // purpose) shouldn't visually run through the space between the posts.
+    const goalHalfHeight = (mi.goals || []).reduce((max, g) => g.axis === 'y' ? max : Math.max(max, Math.abs(g.y2 || 0)), 0);
+    const gTop = ts(0, -goalHalfHeight).y, gBottom = ts(0, goalHalfHeight).y;
+    function drawFieldBorder() {
+      ctx.beginPath();
+      ctx.moveTo(ftl.x, ftl.y); ctx.lineTo(fbr.x, ftl.y); // top edge
+      ctx.moveTo(ftl.x, fbr.y); ctx.lineTo(fbr.x, fbr.y); // bottom edge
+      ctx.moveTo(ftl.x, ftl.y); ctx.lineTo(ftl.x, gTop);   // left edge, above goal
+      ctx.moveTo(ftl.x, gBottom); ctx.lineTo(ftl.x, fbr.y); // left edge, below goal
+      ctx.moveTo(fbr.x, ftl.y); ctx.lineTo(fbr.x, gTop);   // right edge, above goal
+      ctx.moveTo(fbr.x, gBottom); ctx.lineTo(fbr.x, fbr.y); // right edge, below goal
+      ctx.stroke();
+    }
     // Field border glows teal during the Bumpers modifier — same color as the
     // "soft bumper" obstacle kind (shared/bumperLayouts.js WALL_TIER_COLOR),
     // since the walls get that exact same bounciness boost while it's active.
@@ -1428,12 +1428,12 @@
       ctx.shadowBlur = 18 * scale;
       ctx.strokeStyle = 'rgba(26,188,156,0.7)';
       ctx.lineWidth = Math.max(2, 3 * scale);
-      ctx.strokeRect(ftl.x, ftl.y, fbr.x - ftl.x, fbr.y - ftl.y);
+      drawFieldBorder();
       ctx.restore();
     } else {
       ctx.strokeStyle = 'rgba(255,255,255,0.25)';
       ctx.lineWidth = Math.max(1, 2 * scale);
-      ctx.strokeRect(ftl.x, ftl.y, fbr.x - ftl.x, fbr.y - ftl.y);
+      drawFieldBorder();
     }
 
     // Visual decorations: lines
@@ -1480,12 +1480,33 @@
         const p = ts(post.x, post.y);
         roundedRectPath(ctx, p.x, p.y, post.w * scale, post.h * scale, (post.cornerRadius || 0) * scale);
       } else if (post.shape === 'poly') {
+        // Sharp corners, matching the actual physics collision surface
+        // (cornerRadius is currently rendering-only for polygons — no
+        // Minkowski-sum offsetting like the rect bumpers get — so drawing it
+        // rounded here would show a shape the ball doesn't actually collide
+        // with. Real rounded-corner polygon physics is a possible follow-up.)
         const screenPts = post.points.map(pt => ts(pt.x, pt.y));
-        roundedPolygonPath(ctx, screenPts, (post.cornerRadius || 0) * scale);
+        ctx.beginPath();
+        screenPts.forEach((pt, idx) => idx === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
+        ctx.closePath();
       } else {
         const p = ts(post.x, post.y);
         const r = post.radius * scale;
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      }
+      // Same teal glow as the bouncy field border during Bumpers — but only
+      // for the map's own goal posts (isGoalPost), not bumper-layout
+      // obstacles (teal/green circles, rects, polys), which already have
+      // their own color identity and shouldn't get a redundant/mismatched
+      // glow layered on top. Goal posts get the same bounce boost
+      // server-side (see modifiers.js), so they should visually read as
+      // bouncy too, without losing their team-color identity (glow layers
+      // on top, fill color untouched).
+      const glowing = wallsAreBouncy && post.isGoalPost;
+      if (glowing) {
+        ctx.save();
+        ctx.shadowColor = '#1abc9c';
+        ctx.shadowBlur = 14 * scale;
       }
       // Flash is edge-only (fill stays its normal color) — same cue as a
       // player's border turning white while kicking, not a full white fill.
@@ -1494,6 +1515,7 @@
       ctx.strokeStyle = flashing ? '#ffffff' : '#000';
       ctx.lineWidth = 2;
       ctx.stroke();
+      if (glowing) ctx.restore();
     });
 
     // Balls
