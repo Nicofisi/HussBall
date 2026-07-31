@@ -811,6 +811,21 @@ function gameTick() {
 // ============================================================
 const wss = new WebSocketServer({ server: httpServer });
 
+// Heartbeat: a laptop that's closed/put to sleep (rather than cleanly closing
+// the tab) often never sends a TCP FIN, so 'close' can take minutes to fire
+// on its own. Ping every connection on an interval and terminate() any socket
+// that didn't pong back since the previous tick — two misses (~5-10s) and
+// it's gone, which also triggers the normal 'close' cleanup below.
+const HEARTBEAT_INTERVAL_MS = 5000;
+function heartbeatPong() { this.isAlive = true; }
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
 function broadcast(msg) {
   const data = JSON.stringify(msg);
   for (const [, player] of players) {
@@ -1188,6 +1203,8 @@ function handleCheat(playerId, data) {
 
 wss.on('connection', (ws) => {
   let playerId = null;
+  ws.isAlive = true;
+  ws.on('pong', heartbeatPong);
 
   ws.on('message', (raw) => {
     let data;
