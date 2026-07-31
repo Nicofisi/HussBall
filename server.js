@@ -239,7 +239,10 @@ function rebuildGeometry() {
 
 function resetGame() {
   const map = currentMap;
-  for (const p of players.values()) { p.goals = 0; p.assists = 0; p.ownGoals = 0; }
+  // Deliberately NOT zeroing p.goals/assists/ownGoals here — stats persist
+  // across games as long as a player stays in the lobby (per player request),
+  // only clearing when they actually leave (players.delete on disconnect) or
+  // rejoin fresh.
   const ball = physics.createDisc({
     x: map.ball.x,
     y: map.ball.y,
