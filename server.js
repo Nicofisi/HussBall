@@ -945,6 +945,7 @@ function handleJoin(ws, data) {
     isAdmin: id === adminId,
   }));
 
+  wakeTickLoop();   // room was empty → the loop was idling
   console.log(`[+] ${name} joined (${players.size} players)${id === adminId ? ' [ADMIN]' : ''}`);
   broadcastChatSystem(`${name} joined`);
 
@@ -1025,6 +1026,7 @@ function handleStartGame(playerId) {
   roomPhase = 'playing';
   tickSeq = 0;
   resetGame();
+  wakeTickLoop();
   broadcastLobby();
   broadcast({ type: 'gameStarted', map: currentMap.name });
   console.log(`[*] Game started on ${currentMap.name}`);
@@ -1034,6 +1036,7 @@ function handlePauseGame(playerId) {
   if (!isAdmin(playerId)) return;
   if (roomPhase !== 'playing') return;
   roomPhase = 'paused';
+  wakeTickLoop();   // no-op while anyone is connected; kept for clarity
   broadcast({ type: 'gamePaused' });
   broadcastLobby();
   console.log('[*] Game paused');
@@ -1043,6 +1046,7 @@ function handleResumeGame(playerId) {
   if (!isAdmin(playerId)) return;
   if (roomPhase !== 'paused') return;
   roomPhase = 'playing';
+  wakeTickLoop();
   broadcast({ type: 'gameResumed' });
   broadcastLobby();
   console.log('[*] Game resumed');
@@ -1327,7 +1331,53 @@ const IS_WINDOWS = process.platform === 'win32';
 const TICK_NS = BigInt(Math.round(TICK_MS * 1e6));
 let nextTickTime = process.hrtime.bigint();
 
+// Idle gate. The spin-correction above costs ~10-16% of a core permanently, and
+// an EMPTY room pays it for nothing: with nobody connected, gameTick() bails out
+// and sendGameState() has no one to send to, so every tick does literally zero
+// work while still burning the spin. An empty room therefore drops to a coarse
+// 200ms poll (no spin, no 60Hz wakeups).
+//
+// The bar for running the full loop is deliberately low: ONE connected player is
+// enough, whatever the room is doing. Lobby, paused, mid-match — all tick at the
+// full rate. Gating on roomPhase would save another ~10% while people sit in the
+// lobby, but it would also mean anything added to the lobby later (a live map
+// preview, an animation, an idle ball) silently runs at 5Hz, which is exactly
+// the kind of bug nobody connects back to a CPU optimisation months later.
+const IDLE_POLL_MS = 200;
+let idleTimer = null;
+let loopIdle = false;
+
+function nothingToSimulate() {
+  return players.size === 0;
+}
+
+function wakeTickLoop() {
+  if (!loopIdle) return;
+  loopIdle = false;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  nextTickTime = process.hrtime.bigint() + TICK_NS;
+  // Restart the perf window too: it measures ticks per wall-clock second, so
+  // a window left open across the idle period would report ~0 ticks/s — and
+  // that number is broadcast to clients as `tickRate`.
+  tickRateWindowStart = Date.now();
+  tickRateWindowCount = 0;
+  measuredTickRate = TICK_RATE;
+  perfTickSum = 0; perfTickMax = 0;
+  perfSendSum = 0; perfSendMax = 0;
+  setImmediate(tickLoop);
+}
+
 function tickLoop() {
+  if (nothingToSimulate()) {
+    loopIdle = true;
+    // Resync: without this the loop would try to "catch up" on every tick it
+    // skipped while idle, and burn a burst of CPU the moment a game starts.
+    nextTickTime = process.hrtime.bigint() + TICK_NS;
+    idleTimer = setTimeout(() => { idleTimer = null; loopIdle = false; tickLoop(); }, IDLE_POLL_MS);
+    return;
+  }
+  loopIdle = false;
+
   const now = process.hrtime.bigint();
   let ranTicks = 0;
   while (now >= nextTickTime && ranTicks < 5) {
