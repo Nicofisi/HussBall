@@ -99,3 +99,16 @@ public/index.html        — client: rendering, input, lobby UI, sound
 warsaw-server.sh         — disposable low-latency GCP test server
 Dockerfile, deploy.sh    — prod container build + deploy
 ```
+
+## Performance notes
+
+The tick loop runs at 60Hz and spin-corrects the last 1-2ms of each tick to hold precise timing.
+That precision costs ~10% of a core (~16% on a small VPS), so the loop **idles when nobody is
+connected**: it drops to a 200ms poll and `wakeTickLoop()` restores full rate the moment a player
+joins or a game starts. One connected player is enough to run the full loop, whatever the room is
+doing — if you ever add something animated to the lobby, it will just work.
+
+Measured on the Mikrus VPS: 16% of a core with an empty room before, 0.03% after.
+
+If you add work that must keep running with an empty room (scheduled events, bot players), relax
+`nothingToSimulate()` in `server.js` — otherwise it will silently run at 5Hz.
