@@ -1,17 +1,5 @@
 #!/bin/bash
-# Deploy HussBall to Mikrus VPS
-set -e
-
-REMOTE="mikrus:/root/apps/apps/hussball/"
-SSH_PORT=10231
-
-rsync -az \
-  --exclude node_modules \
-  --exclude .git \
-  --exclude .idea \
-  --exclude .env \
-  --exclude data \
-  -e "ssh -p $SSH_PORT" \
-  ./ "$REMOTE"
-
-ssh -p $SSH_PORT mikrus "cd /root/apps && docker compose up -d --build --quiet-pull hussball 2>&1 | tail -3"
+# The apps moved from Mikrus to the home server (basgiath) on 2026-10-16. This script deployed to Mikrus and is retired
+# (the old version is in git history). Deploy in the apps VM: ssh apps, then ~/code/infra/home/deploy.sh hussball
+echo "hussball runs on the home server now. Deploy in the apps VM: ~/code/infra/home/deploy.sh hussball" >&2
+exit 1
