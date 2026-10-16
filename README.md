@@ -79,8 +79,8 @@ SHOW_CPU_STAT=1 npm start
 
 ## Deployment
 
-- **Docker / prod VPS**: `Dockerfile` + `deploy.sh` build and rsync the app to
-  a Docker Compose host.
+- **Production**: the `Dockerfile` image runs on the owner's home server (it moved off a VPS in Oct 2026);
+  deploys happen there (`deploy.sh` here is retired).
 - **Low-latency GCP throwaway box**: `warsaw-server.sh` spins up a cheap,
   disposable Compute Engine instance in Warsaw for low-ping testing, prints
   its IP, and tears it down on Ctrl+C (or automatically after 90 minutes,
@@ -97,7 +97,7 @@ shared/modifiers.js      — Chaos mode's random modifier effects
 shared/bumperLayouts.js  — obstacle layouts used by the Bumpers modifier
 public/index.html        — client: rendering, input, lobby UI, sound
 warsaw-server.sh         — disposable low-latency GCP test server
-Dockerfile, deploy.sh    — prod container build + deploy
+Dockerfile, deploy.sh    — prod container build (deploy.sh retired)
 ```
 
 ## Performance notes
