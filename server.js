@@ -38,15 +38,24 @@ const MIME = {
   '.svg':  'image/svg+xml',
 };
 
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const SHARED_DIR = path.join(__dirname, 'shared');
 function serveStatic(req, res) {
   let filePath;
   const url = req.url.split('?')[0]; // strip query string
   if (url === '/' || url === '/index.html') {
-    filePath = path.join(__dirname, 'public', 'index.html');
+    filePath = path.join(PUBLIC_DIR, 'index.html');
   } else if (url.startsWith('/shared/')) {
     filePath = path.join(__dirname, url);
   } else {
-    filePath = path.join(__dirname, 'public', url);
+    filePath = path.join(PUBLIC_DIR, url);
+  }
+  // Only files under public/ and shared/: "/shared/../../etc/passwd" resolves outside and gets a 404.
+  const inside = (dir) => filePath === dir || filePath.startsWith(dir + path.sep);
+  if (!inside(PUBLIC_DIR) && !inside(SHARED_DIR)) {
+    res.writeHead(404);
+    res.end('Not found');
+    return;
   }
 
   const ext = path.extname(filePath);
@@ -812,7 +821,11 @@ function gameTick() {
 // ============================================================
 // WebSocket
 // ============================================================
-const wss = new WebSocketServer({ server: httpServer });
+// A message is a few hundred bytes at most (an input, a chat line): anything bigger is cut off, not parsed in memory.
+const wss = new WebSocketServer({ server: httpServer, maxPayload: 16 * 1024 });
+const MAX_PLAYERS = 32;
+// A client that stops reading (a phone in a pocket) would make the server buffer 60 states a second for it for ever.
+const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 // Heartbeat: a laptop that's closed/put to sleep (rather than cleanly closing
 // the tab) often never sends a TCP FIN, so 'close' can take minutes to fire
@@ -832,7 +845,9 @@ setInterval(() => {
 function broadcast(msg) {
   const data = JSON.stringify(msg);
   for (const [, player] of players) {
-    if (player.ws.readyState === 1) player.ws.send(data);
+    if (player.ws.readyState !== 1) continue;
+    if (player.ws.bufferedAmount > MAX_BUFFERED_BYTES) { player.ws.terminate(); continue; }
+    player.ws.send(data);
   }
 }
 
@@ -917,8 +932,12 @@ function sendGameState() {
 // ---- Message handlers ----
 
 function handleJoin(ws, data) {
+  if (players.size >= MAX_PLAYERS) {
+    ws.send(JSON.stringify({ type: 'full', max: MAX_PLAYERS }));
+    return null;
+  }
   const id = nextPlayerId++;
-  const name = (data.name || 'Player').substring(0, 16);
+  const name = (typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'Player').substring(0, 16);
 
   const player = {
     id, name,
@@ -1143,7 +1162,7 @@ const CHAT_COOLDOWN_MS = 300;
 function handleChat(playerId, data) {
   const player = players.get(playerId);
   if (!player) return;
-  const text = String(data.text || '').trim().substring(0, 200);
+  const text = (typeof data.text === 'string' ? data.text : '').trim().substring(0, 200);
   if (!text) return;
   const now = Date.now();
   if (player.lastChatTime && (now - player.lastChatTime) < CHAT_COOLDOWN_MS) return;
@@ -1212,13 +1231,24 @@ wss.on('connection', (ws) => {
   let playerId = null;
   ws.isAlive = true;
   ws.on('pong', heartbeatPong);
+  // A protocol error on one socket (a frame too big, bad UTF-8) is an 'error' event; unhandled it would bring the
+  // whole server down. ws closes that socket itself, which runs the 'close' cleanup below.
+  ws.on('error', (e) => console.error(`[!] socket error from ${playerId ?? '?'}:`, e.message));
 
   ws.on('message', (raw) => {
     let data;
     try { data = JSON.parse(raw); } catch { return; }
+    // Anything that isn't an object ("null", a number, a list) or that a handler can't digest is ignored: one bad
+    // message from the internet must never bring the server down for everyone (compose would restart it, and a
+    // loop of them would keep it down).
+    if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.type !== 'string') return;
+    try { handleMessage(data); } catch (e) { console.error(`[!] bad message from ${playerId ?? '?'} (${data.type}):`, e.message); }
+  });
 
+  function handleMessage(data) {
     switch (data.type) {
-      case 'join':           playerId = handleJoin(ws, data); break;
+      // One player per socket: a second join would leave the first one as a ghost in the room for ever.
+      case 'join':           if (playerId == null) playerId = handleJoin(ws, data); break;
       case 'ping':           if (playerId) handlePing(playerId, data); ws.send(JSON.stringify({ type: 'pong', t: data.t })); break;
       case 'input':          handleInput(playerId, data); break;
       case 'chat':           if (playerId) handleChat(playerId, data); break;
@@ -1237,7 +1267,7 @@ wss.on('connection', (ws) => {
       case 'changeTimeLimit':  if (playerId) handleChangeTimeLimit(playerId, data); break;
       case 'setModifierWeight': if (playerId) handleSetModifierWeight(playerId, data); break;
     }
-  });
+  }
 
   ws.on('close', () => {
     if (playerId) {
